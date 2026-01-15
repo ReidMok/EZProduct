@@ -40,6 +40,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
+  // Skip callback route - it's handled by auth.callback.tsx
+  if (pathname === "/auth/callback") {
+    console.log(`[Auth] Callback route should be handled by auth.callback.tsx`);
+    // Let it fall through to shopify.authenticate.admin
+  }
+
   // Handle all other auth routes (callback, etc.)
   // shopify.authenticate.admin will handle the OAuth flow
   // It may throw redirect (Response) or return a context object
