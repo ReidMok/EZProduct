@@ -8,11 +8,24 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
 } from "@remix-run/react";
-import { AppProvider } from "@shopify/polaris";
 import "@shopify/polaris/build/esm/styles.css";
+import { json, type LoaderFunctionArgs } from "@remix-run/node";
+import { AppProvider, useNonce } from "@shopify/shopify-app-remix/react";
+import enTranslations from "@shopify/polaris/locales/en.json";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  // Expose only non-secret env vars to the client
+  return json({
+    apiKey: process.env.SHOPIFY_API_KEY!,
+  });
+};
 
 export default function App() {
+  const { apiKey } = useLoaderData<typeof loader>();
+  const nonce = useNonce();
+
   return (
     <html lang="en">
       <head>
@@ -22,11 +35,12 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <AppProvider i18n={{}}>
+        <AppProvider isEmbeddedApp apiKey={apiKey} i18n={enTranslations}>
           <Outlet />
         </AppProvider>
         <ScrollRestoration />
-        <Scripts />
+        {/* IMPORTANT: Shopify embedded apps require nonce on scripts to satisfy CSP */}
+        <Scripts nonce={nonce} />
       </body>
     </html>
   );
