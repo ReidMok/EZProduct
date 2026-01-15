@@ -1,10 +1,11 @@
 /**
- * Authentication Routes
- * Handles all authentication-related routes (OAuth callbacks, login, etc.)
- * This catch-all route handles /auth/* paths
+ * Authentication Routes - Catch-all for /auth/* paths
+ * 
+ * IMPORTANT: This route should NOT handle /auth/callback
+ * The specific route auth.callback.tsx takes priority in Remix routing
  * 
  * For embedded Shopify apps, shopify.authenticate.admin() automatically handles
- * the OAuth flow, including redirecting to Shopify OAuth page when needed.
+ * the OAuth flow. This route only handles paths that don't have specific routes.
  */
 
 import { type LoaderFunctionArgs, type ActionFunctionArgs } from "@remix-run/node";
@@ -17,10 +18,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   console.log(`[Auth $] ${request.method} ${pathname}${searchParams.toString() ? '?' + searchParams.toString() : ''}`);
   console.log(`[Auth $] Full URL: ${request.url}`);
 
-  // For embedded apps, shopify.authenticate.admin() handles everything:
-  // - If no session exists, it redirects to Shopify OAuth
-  // - If session exists, it returns the authenticated context
-  // - It handles OAuth callbacks automatically
+  // Skip callback routes - they're handled by auth.callback.tsx
+  // In Remix, specific routes (auth.callback.tsx) take priority over catch-all (auth.$.tsx)
+  if (pathname === "/auth/callback" || 
+      pathname === "/auth/shopify/callback" || 
+      pathname === "/api/auth/callback") {
+    console.log(`[Auth $] Callback route detected - should be handled by auth.callback.tsx`);
+    // Return 404 to let Remix try the specific route
+    // If specific route doesn't exist, this will handle it (but it should exist)
+    return new Response("Not Found", { status: 404 });
+  }
+
+  // For other auth routes, let shopify.authenticate.admin() handle them
+  // This includes /auth/login, /auth, etc.
   try {
     console.log(`[Auth $] Calling shopify.authenticate.admin for ${pathname}`);
     const result = await shopify.authenticate.admin(request);
