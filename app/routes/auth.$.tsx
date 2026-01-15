@@ -4,7 +4,7 @@
  * This catch-all route handles /auth/* paths
  */
 
-import { type LoaderFunctionArgs, type ActionFunctionArgs } from "@remix-run/node";
+import { json, type LoaderFunctionArgs, type ActionFunctionArgs } from "@remix-run/node";
 import shopify from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -23,12 +23,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         // shopify.login may return a Promise or throw a redirect
         const result = await shopify.login(request);
         console.log(`[Auth] shopify.login result:`, result);
-        // If result is an empty object, redirect to app route
+        // If result is an empty object, return it as JSON (Shopify will handle it)
+        // Don't redirect to /app as it will cause a redirect loop
         if (result && typeof result === 'object' && Object.keys(result).length === 0) {
-          return new Response(null, {
-            status: 302,
-            headers: { Location: '/app' },
-          });
+          return json({});
         }
         return result;
       } catch (error) {
