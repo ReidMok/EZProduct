@@ -13,7 +13,6 @@ import {
 import "@shopify/polaris/build/esm/styles.css";
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
 import { AppProvider, useNonce } from "@shopify/shopify-app-remix/react";
-import enTranslations from "@shopify/polaris/locales/en.json";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Expose only non-secret env vars to the client
@@ -35,7 +34,8 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <AppProvider isEmbeddedApp apiKey={apiKey} i18n={enTranslations}>
+        {/* Keep i18n minimal to avoid JSON import issues in some build targets */}
+        <AppProvider isEmbeddedApp apiKey={apiKey} i18n={{}}>
           <Outlet />
         </AppProvider>
         <ScrollRestoration />
