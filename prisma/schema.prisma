@@ -1,0 +1,65 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // Changed from sqlite to postgresql for production
+  url      = env("DATABASE_URL")
+}
+
+// Shopify Shop Information
+model Shop {
+  id        String   @id @default(cuid())
+  shop      String   @unique
+  accessToken String
+  scope     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  productGenerations ProductGeneration[]
+  
+  @@index([shop])
+}
+
+// AI Product Generation History
+model ProductGeneration {
+  id          String   @id @default(cuid())
+  shopId      String
+  
+  // Input
+  keywords    String
+  imageUrl    String?  // Optional uploaded image URL
+  
+  // AI Generated Content
+  title       String
+  descriptionHtml String
+  tags        String   // Comma-separated tags
+  seoTitle    String?
+  seoDescription String?
+  
+  // Variants Data (stored as JSON)
+  variantsJson String  // JSON string of variants array
+  
+  // Shopify Product Info
+  shopifyProductId String?
+  shopifyProductHandle String?
+  
+  // Status
+  status      String   @default("pending") // pending, generated, synced, failed
+  errorMessage String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  
+  @@index([shopId])
+  @@index([status])
+  @@index([createdAt])
+}
+
