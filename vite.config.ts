@@ -13,6 +13,15 @@ export default defineConfig({
       },
     }),
   ],
+  // Vercel/SSR build stability for Shopify Polaris + App Bridge (ESM packages)
+  // Without this, the server build can fail while bundling Polaris.
+  ssr: {
+    noExternal: [
+      "@shopify/polaris",
+      "@shopify/app-bridge",
+      "@shopify/app-bridge-react",
+    ],
+  },
   server: {
     port: 3000,
     strictPort: true,
