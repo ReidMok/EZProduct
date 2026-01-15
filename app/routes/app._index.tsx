@@ -72,9 +72,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     // Step 3: Save to database
-    await prisma.productGeneration.create({
-      data: {
-        shopId: session.shop,
+        const shopRecord = await prisma.shop.upsert({
+          where: { shop: session.shop },
+          update: {
+            accessToken: session.accessToken!,
+            scope: session.scope ?? "",
+          },
+          create: {
+            shop: session.shop,
+            accessToken: session.accessToken!,
+            scope: session.scope ?? "",
+          },
+        });
+
+        await prisma.productGeneration.create({
+          data: {
+            shopId: shopRecord.id,
         keywords: keywords.trim(),
         imageUrl: imageUrl || null,
         title: generatedProduct.title,

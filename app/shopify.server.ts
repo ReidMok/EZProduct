@@ -2,54 +2,103 @@
  * Shopify Authentication and API Setup
  */
 
+import "@shopify/shopify-api/adapters/node";
 import { shopifyApp } from "@shopify/shopify-app-remix/server";
 import { prisma } from "./db.server";
 
 class ShopifyPrismaSessionStorage {
-  constructor(private prisma: any) {}
+  constructor(private prismaClient: typeof prisma) {}
 
-  async storeSession(session: any) {
-    console.log(`[SessionStorage] Storing session for shop: ${session.shop}`);
-    await this.prisma.shop.upsert({
-      where: { shop: session.shop },
+  /**
+   * Shopify App Remix expects these methods to match its SessionStorage contract.
+   * Critical points:
+   * - Use session.id as the primary key (NOT shop domain)
+   * - Methods should return boolean where expected
+   */
+
+  async storeSession(session: any): Promise<boolean> {
+    console.log(`[SessionStorage] storeSession id=${session.id} shop=${session.shop}`);
+
+    await this.prismaClient.session.upsert({
+      where: { id: session.id },
       update: {
+        shop: session.shop,
+        state: session.state ?? null,
+        isOnline: Boolean(session.isOnline),
+        scope: session.scope ?? null,
         accessToken: session.accessToken,
-        scope: session.scope,
+        expires: session.expires ?? null,
+        onlineAccessInfo: session.onlineAccessInfo ?? null,
       },
       create: {
+        id: session.id,
         shop: session.shop,
+        state: session.state ?? null,
+        isOnline: Boolean(session.isOnline),
+        scope: session.scope ?? null,
         accessToken: session.accessToken,
-        scope: session.scope,
+        expires: session.expires ?? null,
+        onlineAccessInfo: session.onlineAccessInfo ?? null,
       },
     });
-    console.log(`[SessionStorage] Session stored successfully for shop: ${session.shop}`);
-  }
 
-  async loadSession(id: string) {
-    console.log(`[SessionStorage] Loading session for shop: ${id}`);
-    const shop = await this.prisma.shop.findUnique({
-      where: { shop: id },
-    });
-    if (!shop) {
-      console.log(`[SessionStorage] No session found for shop: ${id}`);
-      return undefined;
+    // Optional: keep a Shop record for your app’s own data/history linkage
+    // This is NOT the session storage; it’s just convenient for ProductGeneration relations.
+    try {
+      await this.prismaClient.shop.upsert({
+        where: { shop: session.shop },
+        update: {
+          accessToken: session.accessToken,
+          scope: session.scope ?? "",
+        },
+        create: {
+          shop: session.shop,
+          accessToken: session.accessToken,
+          scope: session.scope ?? "",
+        },
+      });
+    } catch (e) {
+      console.error(`[SessionStorage] Failed to upsert Shop record for ${session.shop}:`, e);
     }
 
-    console.log(`[SessionStorage] Session loaded successfully for shop: ${id}`);
+    return true;
+  }
+
+  async loadSession(id: string): Promise<any | undefined> {
+    console.log(`[SessionStorage] loadSession id=${id}`);
+    const s = await this.prismaClient.session.findUnique({ where: { id } });
+    if (!s) return undefined;
+
     return {
-      id: shop.shop,
-      shop: shop.shop,
-      state: "",
-      isOnline: false,
-      accessToken: shop.accessToken,
-      scope: shop.scope,
+      id: s.id,
+      shop: s.shop,
+      state: s.state ?? "",
+      isOnline: s.isOnline,
+      scope: s.scope ?? undefined,
+      accessToken: s.accessToken,
+      expires: s.expires ?? undefined,
+      onlineAccessInfo: s.onlineAccessInfo ?? undefined,
     };
   }
 
-  async deleteSession(id: string) {
-    await this.prisma.shop.delete({
-      where: { shop: id },
-    });
+  async deleteSession(id: string): Promise<boolean> {
+    console.log(`[SessionStorage] deleteSession id=${id}`);
+    await this.prismaClient.session.deleteMany({ where: { id } });
+    return true;
+  }
+
+  async findSessionsByShop(shop: string): Promise<any[]> {
+    const sessions = await this.prismaClient.session.findMany({ where: { shop } });
+    return sessions.map((s) => ({
+      id: s.id,
+      shop: s.shop,
+      state: s.state ?? "",
+      isOnline: s.isOnline,
+      scope: s.scope ?? undefined,
+      accessToken: s.accessToken,
+      expires: s.expires ?? undefined,
+      onlineAccessInfo: s.onlineAccessInfo ?? undefined,
+    }));
   }
 }
 
