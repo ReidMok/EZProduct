@@ -19,11 +19,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (pathname === "/auth/login" || pathname === "/auth") {
     if (shopify.login) {
       console.log(`[Auth] Calling shopify.login for ${pathname}`);
-      // shopify.login may return {} if no shop parameter, or throw redirect
-      // If no shop parameter, just return the empty object (will be handled by UI)
-      const result = shopify.login(request);
-      console.log(`[Auth] shopify.login result:`, result);
-      return result;
+      try {
+        // shopify.login may return a Promise or throw a redirect
+        const result = await shopify.login(request);
+        console.log(`[Auth] shopify.login result:`, result);
+        // If result is an empty object, redirect to app route
+        if (result && typeof result === 'object' && Object.keys(result).length === 0) {
+          return new Response(null, {
+            status: 302,
+            headers: { Location: '/app' },
+          });
+        }
+        return result;
+      } catch (error) {
+        // If it's a Response (redirect), let it through
+        if (error instanceof Response) {
+          console.log(`[Auth] Redirecting from ${pathname} to ${error.headers.get('Location') || 'unknown'}`);
+          throw error;
+        }
+        throw error;
+      }
     }
   }
 
