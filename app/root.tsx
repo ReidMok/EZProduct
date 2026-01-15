@@ -11,7 +11,7 @@ import {
   useLoaderData,
 } from "@remix-run/react";
 import { json, type LinksFunction, type LoaderFunctionArgs } from "@remix-run/node";
-import { AppProvider, useNonce } from "@shopify/shopify-app-remix/react";
+import { AppProvider } from "@shopify/shopify-app-remix/react";
 
 // IMPORTANT: Load Polaris CSS via Remix `links()` so it doesn't break server builds on Vercel.
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
@@ -27,7 +27,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
-  const nonce = useNonce();
 
   return (
     <html lang="en">
@@ -43,8 +42,7 @@ export default function App() {
           <Outlet />
         </AppProvider>
         <ScrollRestoration />
-        {/* IMPORTANT: Shopify embedded apps require nonce on scripts to satisfy CSP */}
-        <Scripts nonce={nonce} />
+        <Scripts />
       </body>
     </html>
   );
