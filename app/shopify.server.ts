@@ -4,6 +4,7 @@
 
 import "@shopify/shopify-api/adapters/node";
 import { shopifyApp } from "@shopify/shopify-app-remix/server";
+import { Session } from "@shopify/shopify-api";
 import { prisma } from "./db.server";
 
 class ShopifyPrismaSessionStorage {
@@ -19,6 +20,13 @@ class ShopifyPrismaSessionStorage {
   async storeSession(session: any): Promise<boolean> {
     console.log(`[SessionStorage] storeSession id=${session.id} shop=${session.shop}`);
 
+    const expires =
+      session.expires instanceof Date
+        ? session.expires
+        : typeof session.expires === "string" || typeof session.expires === "number"
+          ? new Date(session.expires)
+          : null;
+
     await this.prismaClient.session.upsert({
       where: { id: session.id },
       update: {
@@ -27,7 +35,7 @@ class ShopifyPrismaSessionStorage {
         isOnline: Boolean(session.isOnline),
         scope: session.scope ?? null,
         accessToken: session.accessToken,
-        expires: session.expires ?? null,
+        expires,
         onlineAccessInfo: session.onlineAccessInfo ?? null,
       },
       create: {
@@ -37,7 +45,7 @@ class ShopifyPrismaSessionStorage {
         isOnline: Boolean(session.isOnline),
         scope: session.scope ?? null,
         accessToken: session.accessToken,
-        expires: session.expires ?? null,
+        expires,
         onlineAccessInfo: session.onlineAccessInfo ?? null,
       },
     });
@@ -64,12 +72,13 @@ class ShopifyPrismaSessionStorage {
     return true;
   }
 
-  async loadSession(id: string): Promise<any | undefined> {
+  async loadSession(id: string): Promise<Session | undefined> {
     console.log(`[SessionStorage] loadSession id=${id}`);
     const s = await this.prismaClient.session.findUnique({ where: { id } });
     if (!s) return undefined;
 
-    return {
+    // IMPORTANT: Shopify App Remix expects a Session instance that has methods like `isActive()`.
+    return new Session({
       id: s.id,
       shop: s.shop,
       state: s.state ?? "",
@@ -77,8 +86,8 @@ class ShopifyPrismaSessionStorage {
       scope: s.scope ?? undefined,
       accessToken: s.accessToken,
       expires: s.expires ?? undefined,
-      onlineAccessInfo: s.onlineAccessInfo ?? undefined,
-    };
+      onlineAccessInfo: (s.onlineAccessInfo as any) ?? undefined,
+    });
   }
 
   async deleteSession(id: string): Promise<boolean> {
@@ -87,18 +96,21 @@ class ShopifyPrismaSessionStorage {
     return true;
   }
 
-  async findSessionsByShop(shop: string): Promise<any[]> {
+  async findSessionsByShop(shop: string): Promise<Session[]> {
     const sessions = await this.prismaClient.session.findMany({ where: { shop } });
-    return sessions.map((s) => ({
-      id: s.id,
-      shop: s.shop,
-      state: s.state ?? "",
-      isOnline: s.isOnline,
-      scope: s.scope ?? undefined,
-      accessToken: s.accessToken,
-      expires: s.expires ?? undefined,
-      onlineAccessInfo: s.onlineAccessInfo ?? undefined,
-    }));
+    return sessions.map(
+      (s) =>
+        new Session({
+          id: s.id,
+          shop: s.shop,
+          state: s.state ?? "",
+          isOnline: s.isOnline,
+          scope: s.scope ?? undefined,
+          accessToken: s.accessToken,
+          expires: s.expires ?? undefined,
+          onlineAccessInfo: (s.onlineAccessInfo as any) ?? undefined,
+        })
+    );
   }
 }
 
