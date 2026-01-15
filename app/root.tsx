@@ -10,9 +10,13 @@ import {
   ScrollRestoration,
   useLoaderData,
 } from "@remix-run/react";
-import "@shopify/polaris/build/esm/styles.css";
-import { json, type LoaderFunctionArgs } from "@remix-run/node";
+import { json, type LinksFunction, type LoaderFunctionArgs } from "@remix-run/node";
 import { AppProvider, useNonce } from "@shopify/shopify-app-remix/react";
+
+// IMPORTANT: Load Polaris CSS via Remix `links()` so it doesn't break server builds on Vercel.
+import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Expose only non-secret env vars to the client
