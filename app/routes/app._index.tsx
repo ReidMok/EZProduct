@@ -4,6 +4,7 @@
 
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { useActionData, useLoaderData, useNavigation, Form } from "@remix-run/react";
+import { useState } from "react";
 import {
   Page,
   LegacyCard,
@@ -139,6 +140,8 @@ export default function Index() {
   const navigation = useNavigation();
 
   const isSubmitting = navigation.state === "submitting";
+  const [keywords, setKeywords] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
 
   return (
     <Page
@@ -173,7 +176,9 @@ export default function Index() {
                 label="Product Keywords"
                 name="keywords"
                 type="text"
-                placeholder="e.g., Scuba Diver Resin Lamp, Three Divers Night Light"
+                value={keywords}
+                onChange={setKeywords}
+                placeholder="e.g., Ceramic Coffee Mug, Yoga Mat, Pet Collar"
                 helpText="Enter keywords describing your product. AI will generate title, description, variants, and SEO metadata."
                 autoComplete="off"
                 disabled={isSubmitting}
@@ -183,6 +188,8 @@ export default function Index() {
                 label="Product Image URL (Optional)"
                 name="imageUrl"
                 type="url"
+                value={imageUrl}
+                onChange={setImageUrl}
                 placeholder="https://example.com/product-image.jpg"
                 helpText="Optional: Provide an image URL for AI to analyze and incorporate into the description."
                 autoComplete="off"
@@ -211,7 +218,7 @@ export default function Index() {
         <LegacyCard sectioned title="How It Works">
           <BlockStack gap="300">
             <Text as="p">
-              <strong>1. Enter Keywords:</strong> Describe your product (e.g., "Three Divers Resin Night Light")
+                  <strong>1. Enter Keywords:</strong> Describe your product (e.g., "Minimalist Ceramic Coffee Mug")
             </Text>
             <Text as="p">
               <strong>2. AI Generation:</strong> Our AI creates a complete product listing including:
