@@ -65,20 +65,52 @@ export async function createShopifyProduct(
     `;
 
     console.log("[Shopify Sync] Step 1: Creating product with options...");
-    console.log("[Shopify Sync] Product Input:", JSON.stringify(productInput, null, 2));
+    console.log("[Shopify Sync] ========== FULL REQUEST DETAILS ==========");
+    console.log("[Shopify Sync] Mutation String:", createMutation);
+    console.log("[Shopify Sync] Variables:", JSON.stringify({ input: productInput }, null, 2));
+    console.log("[Shopify Sync] Product Input (detailed):", JSON.stringify(productInput, null, 2));
+    console.log("[Shopify Sync] ==========================================");
     
-    const createResponse = await client.request({
-      query: createMutation,
-      variables: {
-        input: productInput,
-      },
-    });
+    let createResponse: any;
+    try {
+      createResponse = await client.request({
+        query: createMutation,
+        variables: {
+          input: productInput,
+        },
+      });
+    } catch (requestError: any) {
+      console.error("[Shopify Sync] Request Error (caught):", requestError);
+      console.error("[Shopify Sync] Request Error Type:", typeof requestError);
+      console.error("[Shopify Sync] Request Error Keys:", Object.keys(requestError || {}));
+      if (requestError?.response) {
+        console.error("[Shopify Sync] Request Error Response:", JSON.stringify(requestError.response, null, 2));
+      }
+      if (requestError?.body) {
+        console.error("[Shopify Sync] Request Error Body:", JSON.stringify(requestError.body, null, 2));
+      }
+      throw requestError;
+    }
 
     const createData = createResponse.body as any;
-    console.log("[Shopify Sync] Product Create Response:", JSON.stringify(createData, null, 2));
-    console.log("[Shopify Sync] Response Type:", typeof createData);
-    console.log("[Shopify Sync] Has data?:", !!createData.data);
-    console.log("[Shopify Sync] Has errors?:", !!createData.errors);
+    console.log("[Shopify Sync] ========== FULL RESPONSE DETAILS ==========");
+    console.log("[Shopify Sync] Response Object Keys:", Object.keys(createResponse || {}));
+    console.log("[Shopify Sync] Response Body (full):", JSON.stringify(createResponse.body, null, 2));
+    console.log("[Shopify Sync] Response Body Type:", typeof createResponse.body);
+    console.log("[Shopify Sync] Has data?:", !!createData?.data);
+    console.log("[Shopify Sync] Has errors?:", !!createData?.errors);
+    if (createData?.data) {
+      console.log("[Shopify Sync] Data Keys:", Object.keys(createData.data));
+      if (createData.data.productCreate) {
+        console.log("[Shopify Sync] productCreate Keys:", Object.keys(createData.data.productCreate));
+        console.log("[Shopify Sync] productCreate.userErrors:", createData.data.productCreate.userErrors);
+        console.log("[Shopify Sync] productCreate.product:", createData.data.productCreate.product);
+      }
+    }
+    if (createData?.errors) {
+      console.log("[Shopify Sync] Errors (full):", JSON.stringify(createData.errors, null, 2));
+    }
+    console.log("[Shopify Sync] ============================================");
 
     // Check for GraphQL errors FIRST
     if (createData.errors && Array.isArray(createData.errors) && createData.errors.length > 0) {
