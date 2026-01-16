@@ -99,6 +99,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       adminKeys: admin ? Object.keys(admin) : [],
     });
     
+    // Test admin.graphql directly to see if it works
+    console.log("[App Action] Testing admin.graphql with a simple query...");
+    try {
+      const testQuery = `query { shop { name } }`;
+      const testResponse = await admin.graphql(testQuery);
+      console.log("[App Action] Test query response type:", typeof testResponse);
+      console.log("[App Action] Test query response keys:", testResponse ? Object.keys(testResponse) : 'null');
+      if (testResponse && typeof testResponse === 'object' && 'status' in testResponse) {
+        console.error("[App Action] Test query returned Response object (redirect)! Status:", (testResponse as Response).status);
+        console.error("[App Action] Test query Response headers:", Object.fromEntries((testResponse as Response).headers.entries()));
+      } else {
+        console.log("[App Action] Test query succeeded! Response:", JSON.stringify(testResponse, null, 2).substring(0, 200));
+      }
+    } catch (testError: any) {
+      console.error("[App Action] Test query failed:", testError);
+    }
+    
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
       accessToken: session.accessToken!,

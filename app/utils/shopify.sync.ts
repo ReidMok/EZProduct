@@ -84,6 +84,28 @@ export async function createShopifyProduct(
           input: productInput,
         },
       });
+      
+      // Check if the response is a Response object (redirect) instead of data
+      if (createResponse && typeof createResponse === 'object' && 'status' in createResponse) {
+        const response = createResponse as Response;
+        console.error("[Shopify Sync] admin.graphql returned a Response object instead of data!");
+        console.error("[Shopify Sync] Response Status:", response.status);
+        console.error("[Shopify Sync] Response Headers:", Object.fromEntries(response.headers.entries()));
+        console.error("[Shopify Sync] Response Type:", response.type);
+        
+        if (response.status === 302 || response.status === 401) {
+          const location = response.headers.get('location');
+          throw new Error(
+            `Shopify authentication failed. ` +
+            `admin.graphql returned ${response.status} redirect to: ${location || 'unknown'}. ` +
+            `This usually means the session is invalid or expired. ` +
+            `Please try refreshing the app in Shopify admin.`
+          );
+        }
+        
+        throw new Error(`Shopify API returned unexpected response status: ${response.status}`);
+      }
+      
       console.log("[Shopify Sync] Request succeeded with Shopify App Remix admin.graphql");
     } catch (requestError: any) {
       console.error("[Shopify Sync] Request Error (caught in inner try-catch):", requestError);
