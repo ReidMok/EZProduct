@@ -137,14 +137,22 @@ export async function createShopifyProduct(
     // Try to extract more details from the error response
     let detailedError = "";
     
+    // Log the full error structure for debugging
+    console.error("[Shopify Sync] Full Error Object:", JSON.stringify(errAny, null, 2));
+    
     if (errAny?.response?.body) {
       const responseBody = errAny.response.body;
-      console.error("[Shopify Sync] Response Body:", JSON.stringify(responseBody, null, 2));
+      console.error("[Shopify Sync] Response Body (full):", JSON.stringify(responseBody, null, 2));
       
       // Try to extract GraphQL errors from response body
       if (responseBody.errors) {
         if (Array.isArray(responseBody.errors)) {
-          detailedError = responseBody.errors.map((e: any) => e.message || String(e)).join("; ");
+          detailedError = responseBody.errors.map((e: any) => {
+            const msg = e.message || String(e);
+            const path = e.path ? ` (path: ${JSON.stringify(e.path)})` : "";
+            const locations = e.locations ? ` (line: ${e.locations[0]?.line}, column: ${e.locations[0]?.column})` : "";
+            return `${msg}${path}${locations}`;
+          }).join("; ");
         } else if (responseBody.errors.message) {
           detailedError = responseBody.errors.message;
         }
@@ -155,11 +163,33 @@ export async function createShopifyProduct(
         const userErrors = responseBody.data.productCreate.userErrors;
         detailedError = userErrors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
       }
+      
+      // Try to extract from nested response object
+      if (responseBody.response && typeof responseBody.response === 'object') {
+        try {
+          const nestedResponse = responseBody.response;
+          if (nestedResponse.body) {
+            const nestedBody = typeof nestedResponse.body === 'string' 
+              ? JSON.parse(nestedResponse.body) 
+              : nestedResponse.body;
+            console.error("[Shopify Sync] Nested Response Body:", JSON.stringify(nestedBody, null, 2));
+            
+            if (nestedBody.errors) {
+              if (Array.isArray(nestedBody.errors)) {
+                detailedError = nestedBody.errors.map((e: any) => e.message || String(e)).join("; ");
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
     }
     
     // Try to extract from error object directly
     if (!detailedError && errAny?.body) {
       const body = errAny.body;
+      console.error("[Shopify Sync] Error Body (direct):", JSON.stringify(body, null, 2));
       if (body.errors) {
         if (Array.isArray(body.errors)) {
           detailedError = body.errors.map((e: any) => e.message || String(e)).join("; ");
@@ -195,11 +225,13 @@ export async function createShopifyProduct(
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
   // Convert variants to Shopify ProductInput format
+  // IMPORTANT: Shopify GraphQL API uses 'options' array, not 'option1', 'option2', etc.
   const variants = product.variants.map((variant: ProductVariant) => {
     const variantInput: any = {
       price: variant.price.toString(),
-      // Use option1 for Size variant (ProductInput format)
-      option1: variant.size,
+      // Use options array for variant values (GraphQL standard format)
+      // The array values correspond to the product-level options array
+      options: [variant.size], // First option (Size) = variant.size
     };
     
     // Add optional fields only if they have valid values
@@ -220,6 +252,7 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
   });
 
   // Build ProductInput (direct format, not nested)
+  // Start with minimal required fields to isolate issues
   const input: any = {
     title: product.title,
     // Define product options (required when using variants with options)
@@ -227,12 +260,12 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     variants,
   };
 
-  // Add description (ProductInput uses bodyHtml, not descriptionHtml)
+  // Add description (ProductInput uses bodyHtml)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
     input.bodyHtml = product.descriptionHtml.trim();
   }
   
-  // Add vendor and productType
+  // Add vendor and productType (optional but recommended)
   input.vendor = "EZProduct";
   input.productType = "AI Generated";
   
@@ -246,17 +279,16 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     }
   }
 
-  // Add images if provided
-  if (imageUrls && imageUrls.length > 0) {
-    input.images = imageUrls.map((src) => ({ src }));
-  }
-
-  // Add SEO metadata if provided
-  if (product.seoTitle || product.seoDescription) {
-    input.seo = {};
-    if (product.seoTitle) input.seo.title = product.seoTitle;
-    if (product.seoDescription) input.seo.description = product.seoDescription;
-  }
+  // Temporarily skip images and SEO to isolate the issue
+  // We'll add them back once basic product creation works
+  // if (imageUrls && imageUrls.length > 0) {
+  //   input.images = imageUrls.map((src) => ({ src }));
+  // }
+  // if (product.seoTitle || product.seoDescription) {
+  //   input.seo = {};
+  //   if (product.seoTitle) input.seo.title = product.seoTitle;
+  //   if (product.seoDescription) input.seo.description = product.seoDescription;
+  // }
 
   return input;
 }
