@@ -32,6 +32,7 @@ function getShopifyClient() {
 
 /**
  * Create product in Shopify
+ * Uses the two-step approach: productCreate + productVariantsBulkCreate
  */
 export async function createShopifyProduct(
   product: GeneratedProduct,
@@ -39,89 +40,112 @@ export async function createShopifyProduct(
   imageUrls?: string[]
 ): Promise<{ productId: string; productHandle: string }> {
   const shopify = getShopifyClient();
-  // IMPORTANT: Use the session passed from shopify.authenticate.admin()
-  // This ensures we're using the correct session with proper authentication
   const session = config.session;
-
-  // Build product input
-  const productInput = buildProductInput(product, imageUrls);
-
-  // GraphQL Mutation
-  // Use productCreate with variants - this is the standard approach
-  // Note: productCreate supports variants with price, sku, etc. in the input
-  const mutation = `
-    mutation productCreate($input: ProductInput!) {
-      productCreate(input: $input) {
-        product {
-          id
-          handle
-          title
-          status
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }
-  `;
+  const client = new shopify.clients.Graphql({ session });
 
   try {
-    const client = new shopify.clients.Graphql({ session });
+    // Step 1: Create product with options (this creates the product + first default variant)
+    const productInput = buildProductCreateInput(product, imageUrls);
     
-    // Log the input for debugging (remove sensitive data in production)
+    const createMutation = `
+      mutation productCreate($input: ProductCreateInput!) {
+        productCreate(input: $input) {
+          product {
+            id
+            handle
+            title
+            status
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    console.log("[Shopify Sync] Step 1: Creating product with options...");
     console.log("[Shopify Sync] Product Input:", JSON.stringify(productInput, null, 2));
-    console.log("[Shopify Sync] Mutation:", mutation);
     
-    // IMPORTANT: Shopify GraphQL client.request() expects query and variables directly
-    // NOT wrapped in a 'data' object
-    const response = await client.request({
-      query: mutation,
+    const createResponse = await client.request({
+      query: createMutation,
       variables: {
         input: productInput,
       },
     });
 
-    const data = response.body as any;
-    
-    // Log full response for debugging (this will help us see what Shopify actually returns)
-    console.log("[Shopify Sync] Full Response Body:", JSON.stringify(data, null, 2));
-    console.log("[Shopify Sync] Response Type:", typeof data);
-    console.log("[Shopify Sync] Has data?:", !!data.data);
-    console.log("[Shopify Sync] Has errors?:", !!data.errors);
+    const createData = createResponse.body as any;
+    console.log("[Shopify Sync] Product Create Response:", JSON.stringify(createData, null, 2));
 
-    // Check for GraphQL errors FIRST (these are syntax/validation errors)
-    if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
-      const errorMessages = data.errors.map((e: any) => {
-        const msg = e.message || String(e);
-        const path = e.path ? ` (path: ${JSON.stringify(e.path)})` : "";
-        return `${msg}${path}`;
-      }).join("; ");
-      console.error("[Shopify Sync] GraphQL Errors:", JSON.stringify(data.errors, null, 2));
+    // Check for errors
+    if (createData.errors && Array.isArray(createData.errors) && createData.errors.length > 0) {
+      const errorMessages = createData.errors.map((e: any) => e.message || String(e)).join("; ");
       throw new Error(`Shopify GraphQL errors: ${errorMessages}`);
     }
 
-    // Check for GraphQL user errors (these are business logic errors)
-    if (data.data?.productCreate?.userErrors?.length > 0) {
-      const errors = data.data.productCreate.userErrors;
-      const errorMessages = errors.map((e: any) => {
-        const field = e.field ? `[${e.field}] ` : "";
-        return `${field}${e.message}`;
-      }).join("; ");
-      console.error("[Shopify Sync] User Errors:", JSON.stringify(errors, null, 2));
+    if (createData.data?.productCreate?.userErrors?.length > 0) {
+      const errors = createData.data.productCreate.userErrors;
+      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
       throw new Error(`Shopify API user errors: ${errorMessages}`);
     }
 
-    // Check if product was created
-    if (!data.data?.productCreate?.product) {
-      console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(data, null, 2));
-      throw new Error("Failed to create product: No product returned in response");
+    if (!createData.data?.productCreate?.product) {
+      throw new Error("Failed to create product: No product returned");
     }
 
-    const createdProduct = data.data.productCreate.product;
+    const createdProduct = createData.data.productCreate.product;
+    const productId = createdProduct.id;
+
+    // Step 2: Create all variants using productVariantsBulkCreate
+    const variantsInput = buildVariantsBulkInput(product.variants, productId);
+    
+    const variantsMutation = `
+      mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkCreate(productId: $productId, variants: $variants) {
+          productVariants {
+            id
+            title
+            price
+            sku
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    console.log("[Shopify Sync] Step 2: Creating variants...");
+    console.log("[Shopify Sync] Variants Input:", JSON.stringify(variantsInput, null, 2));
+    
+    const variantsResponse = await client.request({
+      query: variantsMutation,
+      variables: {
+        productId: productId,
+        variants: variantsInput,
+      },
+    });
+
+    const variantsData = variantsResponse.body as any;
+    console.log("[Shopify Sync] Variants Create Response:", JSON.stringify(variantsData, null, 2));
+
+    // Check for errors
+    if (variantsData.errors && Array.isArray(variantsData.errors) && variantsData.errors.length > 0) {
+      const errorMessages = variantsData.errors.map((e: any) => e.message || String(e)).join("; ");
+      throw new Error(`Shopify GraphQL errors (variants): ${errorMessages}`);
+    }
+
+    if (variantsData.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
+      const errors = variantsData.data.productVariantsBulkCreate.userErrors;
+      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
+      throw new Error(`Shopify API user errors (variants): ${errorMessages}`);
+    }
+
+    console.log("[Shopify Sync] Product and variants created successfully!");
 
     return {
-      productId: createdProduct.id,
+      productId: productId,
       productHandle: createdProduct.handle,
     };
   } catch (error) {
@@ -220,21 +244,76 @@ export async function createShopifyProduct(
 }
 
 /**
- * Build Shopify product input from generated product data
- * Uses ProductInput format for productCreate mutation
+ * Build ProductCreateInput for productCreate mutation
+ * This creates the product and defines options, but only creates the first default variant
  */
-function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
-  // Convert variants to Shopify ProductInput format
-  // IMPORTANT: Shopify GraphQL API uses 'options' array, not 'option1', 'option2', etc.
-  const variants = product.variants.map((variant: ProductVariant) => {
+function buildProductCreateInput(product: GeneratedProduct, imageUrls?: string[]) {
+  // Extract all unique variant sizes for the productOptions
+  const sizeValues = product.variants.map(v => v.size);
+  
+  // Build ProductCreateInput
+  const input: any = {
+    title: product.title,
+    // Define product options using productOptions (not just "options")
+    // Format: [{ name: "Size", values: ["6inch", "8inch", "10inch"] }]
+    productOptions: [
+      {
+        name: "Size",
+        values: sizeValues,
+      },
+    ],
+  };
+
+  // Add description (ProductCreateInput uses descriptionHtml)
+  if (product.descriptionHtml && product.descriptionHtml.trim()) {
+    input.descriptionHtml = product.descriptionHtml.trim();
+  }
+  
+  // Add vendor and productType
+  input.vendor = "EZProduct";
+  input.productType = "AI Generated";
+  
+  // Add tags as array (ProductCreateInput expects array of strings)
+  if (product.tags && product.tags.length > 0) {
+    input.tags = Array.isArray(product.tags) 
+      ? product.tags.filter(t => t && t.trim())
+      : [String(product.tags)];
+  }
+
+  // Add images if provided
+  if (imageUrls && imageUrls.length > 0) {
+    input.media = imageUrls.map((src) => ({ originalSource: src }));
+  }
+
+  // Add SEO metadata if provided
+  if (product.seoTitle || product.seoDescription) {
+    input.seo = {};
+    if (product.seoTitle) input.seo.title = product.seoTitle;
+    if (product.seoDescription) input.seo.description = product.seoDescription;
+  }
+
+  return input;
+}
+
+/**
+ * Build ProductVariantsBulkInput for productVariantsBulkCreate mutation
+ * This creates all variants with their prices, SKUs, etc.
+ */
+function buildVariantsBulkInput(variants: ProductVariant[], productId: string) {
+  return variants.map((variant: ProductVariant) => {
     const variantInput: any = {
+      // Use optionValues to specify which option values this variant uses
+      // Format: [{ option: "Size", value: "6inch" }]
+      optionValues: [
+        {
+          option: "Size",
+          value: variant.size,
+        },
+      ],
       price: variant.price.toString(),
-      // Use options array for variant values (GraphQL standard format)
-      // The array values correspond to the product-level options array
-      options: [variant.size], // First option (Size) = variant.size
     };
     
-    // Add optional fields only if they have valid values
+    // Add optional fields
     if (variant.sku && variant.sku.trim()) {
       variantInput.sku = variant.sku;
     }
@@ -250,47 +329,6 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     
     return variantInput;
   });
-
-  // Build ProductInput (direct format, not nested)
-  // Start with minimal required fields to isolate issues
-  const input: any = {
-    title: product.title,
-    // Define product options (required when using variants with options)
-    options: ["Size"],
-    variants,
-  };
-
-  // Add description (ProductInput uses bodyHtml)
-  if (product.descriptionHtml && product.descriptionHtml.trim()) {
-    input.bodyHtml = product.descriptionHtml.trim();
-  }
-  
-  // Add vendor and productType (optional but recommended)
-  input.vendor = "EZProduct";
-  input.productType = "AI Generated";
-  
-  // Add tags as comma-separated string (ProductInput expects string, not array)
-  if (product.tags && product.tags.length > 0) {
-    const tagsString = Array.isArray(product.tags) 
-      ? product.tags.filter(t => t && t.trim()).join(", ")
-      : String(product.tags);
-    if (tagsString) {
-      input.tags = tagsString;
-    }
-  }
-
-  // Temporarily skip images and SEO to isolate the issue
-  // We'll add them back once basic product creation works
-  // if (imageUrls && imageUrls.length > 0) {
-  //   input.images = imageUrls.map((src) => ({ src }));
-  // }
-  // if (product.seoTitle || product.seoDescription) {
-  //   input.seo = {};
-  //   if (product.seoTitle) input.seo.title = product.seoTitle;
-  //   if (product.seoDescription) input.seo.description = product.seoDescription;
-  // }
-
-  return input;
 }
 
 /**
