@@ -54,16 +54,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, admin } = await shopify.authenticate.admin(request);
-  const formData = await request.formData();
-  const keywords = formData.get("keywords") as string;
-  const imageUrl = formData.get("imageUrl") as string | null;
-
-  if (!keywords || keywords.trim() === "") {
-    return redirect(`/app?result=error&message=${encodeURIComponent("Please enter product keywords")}`);
-  }
-
+  console.log("[App Action] ========== ACTION STARTED ==========");
+  console.log("[App Action] Request URL:", request.url);
+  console.log("[App Action] Request Method:", request.method);
+  
   try {
+    const { session, admin } = await shopify.authenticate.admin(request);
+    console.log("[App Action] Authentication successful. Shop:", session.shop);
+    console.log("[App Action] Admin object available:", !!admin);
+    console.log("[App Action] Admin.graphql available:", !!(admin && admin.graphql));
+    
+    const formData = await request.formData();
+    const keywords = formData.get("keywords") as string;
+    const imageUrl = formData.get("imageUrl") as string | null;
+
+    console.log("[App Action] Form data received. Keywords:", keywords?.substring(0, 50) + "...");
+
+    if (!keywords || keywords.trim() === "") {
+      console.log("[App Action] No keywords provided. Redirecting with error.");
+      return redirect(`/app?result=error&message=${encodeURIComponent("Please enter product keywords")}`);
+    }
+
     console.log("[App Action] Starting product generation...");
     
     // Step 1: Generate product using AI
@@ -73,6 +84,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // Step 2: Sync to Shopify
     console.log("[App Action] Step 2: Syncing to Shopify...");
+    console.log("[App Action] Admin object before createShopifyProduct:", {
+      hasAdmin: !!admin,
+      hasGraphql: !!(admin && admin.graphql),
+      adminKeys: admin ? Object.keys(admin) : [],
+    });
+    
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
       accessToken: session.accessToken!,
@@ -120,59 +137,82 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       "Product generated and synced successfully!"
     )}`;
     console.log("[App Action] Redirecting to:", redirectUrl);
+    console.log("[App Action] ========== ACTION COMPLETED SUCCESSFULLY ==========");
     return redirect(redirectUrl);
   } catch (error) {
+    console.error("[App Action] ========== ERROR OCCURRED ==========");
     console.error("[App Action] Error occurred:", error);
+    console.error("[App Action] Error type:", error instanceof Error ? error.constructor.name : typeof error);
+    console.error("[App Action] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[App Action] Error stack:", error instanceof Error ? error.stack : "No stack trace");
 
-    // Save failed attempt to database
-    // Note: We need to provide a title even for failed attempts
-    let generatedTitle = keywords.trim(); // Use keywords as fallback title
-    
-    // Try to extract title from error if AI generation succeeded but Shopify sync failed
-    try {
-      // If error message contains product info, we might have a generated product
-      // For now, we'll use keywords as title
-    } catch (e) {
-      // Ignore
+    // Extract error message for user display
+    let errorMessage = "Failed to generate product";
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      // Truncate very long error messages
+      if (errorMessage.length > 200) {
+        errorMessage = errorMessage.substring(0, 200) + "...";
+      }
     }
 
+    // Try to save failed attempt to database (only if we have session and keywords)
     try {
-      const shopRecord = await prisma.shop.upsert({
-        where: { shop: session.shop },
-        update: {
-          accessToken: session.accessToken!,
-          scope: session.scope ?? "",
-        },
-        create: {
-          shop: session.shop,
-          accessToken: session.accessToken!,
-          scope: session.scope ?? "",
-        },
-      });
+      // Get session and formData again if they're not available
+      let session: any;
+      let keywords: string = "";
+      let imageUrl: string | null = null;
+      
+      try {
+        const authResult = await shopify.authenticate.admin(request);
+        session = authResult.session;
+        const formData = await request.formData();
+        keywords = (formData.get("keywords") as string) || "";
+        imageUrl = formData.get("imageUrl") as string | null;
+      } catch (authError) {
+        console.error("[App Action] Could not get session for error logging:", authError);
+        // Continue without saving to database
+      }
 
-      await prisma.productGeneration.create({
-        data: {
-          shopId: shopRecord.id,
-          keywords: keywords.trim(),
-          imageUrl: imageUrl || null,
-          title: generatedTitle, // Required field - use keywords as fallback
-          descriptionHtml: "<p>Failed to generate</p>", // Required field - minimal HTML
-          tags: "", // Required field - empty string
-          variantsJson: "[]", // Required field - empty array
-          status: "failed",
-          errorMessage: error instanceof Error ? error.message : "Unknown error",
-        },
-      });
+      if (session && keywords) {
+        const shopRecord = await prisma.shop.upsert({
+          where: { shop: session.shop },
+          update: {
+            accessToken: session.accessToken!,
+            scope: session.scope ?? "",
+          },
+          create: {
+            shop: session.shop,
+            accessToken: session.accessToken!,
+            scope: session.scope ?? "",
+          },
+        });
+
+        await prisma.productGeneration.create({
+          data: {
+            shopId: shopRecord.id,
+            keywords: keywords.trim() || "N/A",
+            imageUrl: imageUrl || null,
+            title: keywords.trim() || "N/A", // Required field - use keywords as fallback
+            descriptionHtml: "<p>Failed to generate</p>", // Required field - minimal HTML
+            tags: "", // Required field - empty string
+            variantsJson: "[]", // Required field - empty array
+            status: "failed",
+            errorMessage: errorMessage,
+          },
+        });
+        console.log("[App Action] Failed attempt saved to database.");
+      }
     } catch (dbError) {
       console.error("[App Action] Failed to save error to database:", dbError);
+      // Continue - don't fail the entire request if DB save fails
     }
 
-    return redirect(
-      `/app?result=error&message=${encodeURIComponent(
-        error instanceof Error ? error.message : "Failed to generate product"
-      )}`
-    );
+    // Always return a redirect, even if error logging failed
+    const redirectUrl = `/app?result=error&message=${encodeURIComponent(errorMessage)}`;
+    console.log("[App Action] Redirecting with error to:", redirectUrl);
+    console.log("[App Action] ========== ACTION COMPLETED WITH ERROR ==========");
+    return redirect(redirectUrl);
   }
 };
 
