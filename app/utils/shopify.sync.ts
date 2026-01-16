@@ -27,6 +27,24 @@ export async function createShopifyProduct(
 ): Promise<{ productId: string; productHandle: string }> {
   const { admin, session } = config;
 
+  // Validate admin object
+  if (!admin) {
+    throw new Error("Admin object is missing. Make sure to pass admin from shopify.authenticate.admin(request)");
+  }
+  if (!admin.graphql) {
+    throw new Error("admin.graphql is not available. Admin object: " + JSON.stringify(Object.keys(admin || {})));
+  }
+  if (!session) {
+    throw new Error("Session is missing");
+  }
+  if (!session.accessToken) {
+    throw new Error("Session accessToken is missing");
+  }
+
+  console.log("[Shopify Sync] Admin object type:", typeof admin);
+  console.log("[Shopify Sync] Admin object keys:", Object.keys(admin || {}));
+  console.log("[Shopify Sync] admin.graphql type:", typeof admin.graphql);
+
   try {
     // Step 1: Create product with options (this creates the product + first default variant)
     // Start with minimal input to isolate the issue
