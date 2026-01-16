@@ -4,7 +4,7 @@
 
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useNavigation, Form, useSearchParams } from "@remix-run/react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Page,
   LegacyCard,
@@ -64,34 +64,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    console.log("[App Action] Starting product generation...");
+    
     // Step 1: Generate product using AI
+    console.log("[App Action] Step 1: Generating product with AI...");
     const generatedProduct = await generateProduct(keywords.trim(), imageUrl || undefined);
+    console.log("[App Action] AI generation completed. Title:", generatedProduct.title);
 
     // Step 2: Sync to Shopify
-    // Pass the session directly from shopify.authenticate.admin()
+    console.log("[App Action] Step 2: Syncing to Shopify...");
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
       accessToken: session.accessToken!,
       session: session, // Pass the actual Session instance
     });
+    console.log("[App Action] Shopify sync completed. Product ID:", shopifyResult.productId);
+    console.log("[App Action] Product Handle:", shopifyResult.productHandle);
 
     // Step 3: Save to database
-        const shopRecord = await prisma.shop.upsert({
-          where: { shop: session.shop },
-          update: {
-            accessToken: session.accessToken!,
-            scope: session.scope ?? "",
-          },
-          create: {
-            shop: session.shop,
-            accessToken: session.accessToken!,
-            scope: session.scope ?? "",
-          },
-        });
+    console.log("[App Action] Step 3: Saving to database...");
+    const shopRecord = await prisma.shop.upsert({
+      where: { shop: session.shop },
+      update: {
+        accessToken: session.accessToken!,
+        scope: session.scope ?? "",
+      },
+      create: {
+        shop: session.shop,
+        accessToken: session.accessToken!,
+        scope: session.scope ?? "",
+      },
+    });
 
-        await prisma.productGeneration.create({
-          data: {
-            shopId: shopRecord.id,
+    await prisma.productGeneration.create({
+      data: {
+        shopId: shopRecord.id,
         keywords: keywords.trim(),
         imageUrl: imageUrl || null,
         title: generatedProduct.title,
@@ -105,15 +112,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         status: "synced",
       },
     });
+    console.log("[App Action] Database save completed.");
 
     // PRG pattern: redirect back to /app so Shopify iframe won't show raw JSON or a blank "200" page
-    return redirect(
-      `/app?result=success&productId=${encodeURIComponent(shopifyResult.productId)}&message=${encodeURIComponent(
-        "Product generated and synced successfully!"
-      )}`
-    );
+    const redirectUrl = `/app?result=success&productId=${encodeURIComponent(shopifyResult.productId)}&message=${encodeURIComponent(
+      "Product generated and synced successfully!"
+    )}`;
+    console.log("[App Action] Redirecting to:", redirectUrl);
+    return redirect(redirectUrl);
   } catch (error) {
-    console.error("Action Error:", error);
+    console.error("[App Action] Error occurred:", error);
+    console.error("[App Action] Error stack:", error instanceof Error ? error.stack : "No stack trace");
 
     // Save failed attempt to database
     try {
@@ -160,6 +169,19 @@ export default function Index() {
   const [keywords, setKeywords] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
+  // Clear URL search params after displaying message (optional, for cleaner URLs)
+  useEffect(() => {
+    if (result || message) {
+      const timer = setTimeout(() => {
+        // Only clear if not currently submitting
+        if (navigation.state === "idle") {
+          setSearchParams({}, { replace: true });
+        }
+      }, 10000); // Clear after 10 seconds
+      return () => clearTimeout(timer);
+    }
+  }, [result, message, navigation.state, setSearchParams]);
+
   return (
     <Page
       title="EZProduct - AI Product Generator"
@@ -172,15 +194,19 @@ export default function Index() {
           </Banner>
         )}
 
-        {result === "success" && productId && (
+        {result === "success" && (
           <Banner
             status="success"
             title="Success!"
-            action={{
-              content: "View Product",
-              url: `https://${shop}/admin/products/${productId}`,
-              external: true,
-            }}
+            action={
+              productId
+                ? {
+                    content: "View Product",
+                    url: `https://${shop}/admin/products/${productId.replace("gid://shopify/Product/", "")}`,
+                    external: true,
+                  }
+                : undefined
+            }
           >
             <p>{message || "Product generated and synced successfully!"}</p>
           </Banner>
