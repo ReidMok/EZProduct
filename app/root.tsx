@@ -12,6 +12,7 @@ import {
 } from "@remix-run/react";
 import { json, type LinksFunction, type LoaderFunctionArgs } from "@remix-run/node";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
+import enTranslations from "@shopify/polaris/locales/en.json";
 
 // IMPORTANT: Load Polaris CSS via Remix `links()` so it doesn't break server builds on Vercel.
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
@@ -37,8 +38,7 @@ export default function App() {
         <Links />
       </head>
       <body>
-        {/* Keep i18n minimal to avoid JSON import issues in some build targets */}
-        <AppProvider isEmbeddedApp apiKey={apiKey} i18n={{}}>
+        <AppProvider isEmbeddedApp apiKey={apiKey} i18n={enTranslations}>
           <Outlet />
         </AppProvider>
         <ScrollRestoration />
