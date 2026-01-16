@@ -70,6 +70,10 @@ export async function createShopifyProduct(
 
   try {
     const client = new shopify.clients.Graphql({ session });
+    
+    // Log the input for debugging (remove sensitive data in production)
+    console.log("[Shopify Sync] Product Input:", JSON.stringify(productInput, null, 2));
+    
     const response = await client.request({
       data: {
         query: mutation,
@@ -80,15 +84,27 @@ export async function createShopifyProduct(
     });
 
     const data = response.body as any;
+    
+    // Log full response for debugging
+    console.log("[Shopify Sync] Response:", JSON.stringify(data, null, 2));
 
+    // Check for GraphQL user errors
     if (data.data?.productCreate?.userErrors?.length > 0) {
       const errors = data.data.productCreate.userErrors;
-      throw new Error(
-        `Shopify API errors: ${errors.map((e: any) => e.message).join(", ")}`
-      );
+      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join(", ");
+      console.error("[Shopify Sync] User Errors:", errors);
+      throw new Error(`Shopify API errors: ${errorMessages}`);
+    }
+
+    // Check for GraphQL errors (different from userErrors)
+    if (data.errors && data.errors.length > 0) {
+      const errorMessages = data.errors.map((e: any) => e.message).join(", ");
+      console.error("[Shopify Sync] GraphQL Errors:", data.errors);
+      throw new Error(`Shopify GraphQL errors: ${errorMessages}`);
     }
 
     if (!data.data?.productCreate?.product) {
+      console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(data, null, 2));
       throw new Error("Failed to create product: No product returned");
     }
 
@@ -99,7 +115,35 @@ export async function createShopifyProduct(
       productHandle: createdProduct.handle,
     };
   } catch (error) {
-    console.error("Shopify Sync Error:", error);
+    // Enhanced error logging for debugging
+    console.error("[Shopify Sync] Error Details:", {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      error: error,
+    });
+    
+    const errAny = error as any;
+    
+    // Try to extract more details from the error
+    if (errAny?.response) {
+      console.error("[Shopify Sync] Error Response:", {
+        status: errAny.response.statusCode || errAny.response.status,
+        statusText: errAny.response.statusText,
+        body: errAny.response.body,
+        headers: errAny.response.headers,
+      });
+    }
+    
+    if (errAny?.networkStatusCode || errAny?.message) {
+      throw new Error(
+        `Failed to sync product to Shopify: Received an error response (${errAny.networkStatusCode || "Unknown"}) from Shopify: ${JSON.stringify({
+          networkStatusCode: errAny.networkStatusCode,
+          message: errAny.message,
+          response: errAny.response,
+        })}`
+      );
+    }
+
     throw new Error(
       `Failed to sync product to Shopify: ${error instanceof Error ? error.message : "Unknown error"}`
     );
@@ -111,58 +155,46 @@ export async function createShopifyProduct(
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
   // Convert variants to Shopify format
-  const variants = product.variants.map((variant: ProductVariant) => ({
-    price: variant.price.toString(),
-    compareAtPrice: variant.compareAtPrice.toString(),
-    sku: variant.sku,
-    weight: variant.weight,
-    weightUnit: "GRAMS",
-    // Keep variant input minimal to avoid schema/version mismatches that can cause HTTP 400.
-    // Inventory/location should be managed separately after product creation.
-    inventoryPolicy: "CONTINUE",
-  }));
+  // IMPORTANT: Shopify requires variants to have 'options' array with exactly one option value
+  const variants = product.variants.map((variant: ProductVariant) => {
+    const variantInput: any = {
+      price: variant.price.toString(),
+      sku: variant.sku,
+      // Only include compareAtPrice if it's greater than 0
+      ...(variant.compareAtPrice > 0 && { compareAtPrice: variant.compareAtPrice.toString() }),
+      // Include weight only if provided and greater than 0
+      ...(variant.weight > 0 && {
+        weight: variant.weight,
+        weightUnit: "GRAMS",
+      }),
+      // REQUIRED: Each variant must have an options array with the variant size
+      options: [variant.size],
+    };
+    return variantInput;
+  });
 
   // Build product input
   const input: any = {
     title: product.title,
-    descriptionHtml: product.descriptionHtml,
+    bodyHtml: product.descriptionHtml, // Shopify uses 'bodyHtml' not 'descriptionHtml'
     vendor: "EZProduct",
     productType: "AI Generated",
-    tags: product.tags,
-    status: "ACTIVE",
-    variants: variants,
+    // Tags should be a comma-separated string
+    tags: Array.isArray(product.tags) ? product.tags.join(", ") : product.tags,
+    variants,
   };
-
-  // Add SEO metadata
-  if (product.seoTitle || product.seoDescription) {
-    input.metafields = [];
-    
-    if (product.seoTitle) {
-      input.metafields.push({
-        namespace: "custom",
-        key: "seo_title",
-        value: product.seoTitle,
-        type: "single_line_text_field",
-      });
-    }
-
-    if (product.seoDescription) {
-      input.metafields.push({
-        namespace: "custom",
-        key: "seo_description",
-        value: product.seoDescription,
-        type: "multi_line_text_field",
-      });
-    }
-  }
 
   // Add images if provided
   if (imageUrls && imageUrls.length > 0) {
-    input.media = imageUrls.map((url, index) => ({
-      mediaContentType: "IMAGE",
-      originalSource: url,
-      alt: `${product.title} - Image ${index + 1}`,
-    }));
+    input.images = imageUrls.map((src) => ({ src }));
+  }
+
+  // Add SEO metadata if provided
+  if (product.seoTitle || product.seoDescription) {
+    input.seo = {
+      ...(product.seoTitle && { title: product.seoTitle }),
+      ...(product.seoDescription && { description: product.seoDescription }),
+    };
   }
 
   return input;
