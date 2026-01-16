@@ -73,39 +73,51 @@ export async function createShopifyProduct(
     
     // Log the input for debugging (remove sensitive data in production)
     console.log("[Shopify Sync] Product Input:", JSON.stringify(productInput, null, 2));
+    console.log("[Shopify Sync] Mutation:", mutation);
     
+    // IMPORTANT: Shopify GraphQL client.request() expects query and variables directly
+    // NOT wrapped in a 'data' object
     const response = await client.request({
-      data: {
-        query: mutation,
-        variables: {
-          input: productInput,
-        },
+      query: mutation,
+      variables: {
+        input: productInput,
       },
     });
 
     const data = response.body as any;
     
-    // Log full response for debugging
-    console.log("[Shopify Sync] Response:", JSON.stringify(data, null, 2));
+    // Log full response for debugging (this will help us see what Shopify actually returns)
+    console.log("[Shopify Sync] Full Response Body:", JSON.stringify(data, null, 2));
+    console.log("[Shopify Sync] Response Type:", typeof data);
+    console.log("[Shopify Sync] Has data?:", !!data.data);
+    console.log("[Shopify Sync] Has errors?:", !!data.errors);
 
-    // Check for GraphQL user errors
-    if (data.data?.productCreate?.userErrors?.length > 0) {
-      const errors = data.data.productCreate.userErrors;
-      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join(", ");
-      console.error("[Shopify Sync] User Errors:", errors);
-      throw new Error(`Shopify API errors: ${errorMessages}`);
-    }
-
-    // Check for GraphQL errors (different from userErrors)
-    if (data.errors && data.errors.length > 0) {
-      const errorMessages = data.errors.map((e: any) => e.message).join(", ");
-      console.error("[Shopify Sync] GraphQL Errors:", data.errors);
+    // Check for GraphQL errors FIRST (these are syntax/validation errors)
+    if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+      const errorMessages = data.errors.map((e: any) => {
+        const msg = e.message || String(e);
+        const path = e.path ? ` (path: ${JSON.stringify(e.path)})` : "";
+        return `${msg}${path}`;
+      }).join("; ");
+      console.error("[Shopify Sync] GraphQL Errors:", JSON.stringify(data.errors, null, 2));
       throw new Error(`Shopify GraphQL errors: ${errorMessages}`);
     }
 
+    // Check for GraphQL user errors (these are business logic errors)
+    if (data.data?.productCreate?.userErrors?.length > 0) {
+      const errors = data.data.productCreate.userErrors;
+      const errorMessages = errors.map((e: any) => {
+        const field = e.field ? `[${e.field}] ` : "";
+        return `${field}${e.message}`;
+      }).join("; ");
+      console.error("[Shopify Sync] User Errors:", JSON.stringify(errors, null, 2));
+      throw new Error(`Shopify API user errors: ${errorMessages}`);
+    }
+
+    // Check if product was created
     if (!data.data?.productCreate?.product) {
       console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(data, null, 2));
-      throw new Error("Failed to create product: No product returned");
+      throw new Error("Failed to create product: No product returned in response");
     }
 
     const createdProduct = data.data.productCreate.product;
@@ -155,51 +167,69 @@ export async function createShopifyProduct(
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
   // Convert variants to Shopify format
-  // IMPORTANT: Shopify GraphQL API uses 'option1', 'option2', 'option3' fields for variant options
-  // NOT 'options' array. For a single Size option, we use 'option1'.
+  // Start with minimal required fields to avoid validation errors
   const variants = product.variants.map((variant: ProductVariant) => {
     const variantInput: any = {
       price: variant.price.toString(),
-      sku: variant.sku,
-      // Only include compareAtPrice if it's greater than 0
-      ...(variant.compareAtPrice > 0 && { compareAtPrice: variant.compareAtPrice.toString() }),
-      // Include weight only if provided and greater than 0
-      ...(variant.weight > 0 && {
-        weight: variant.weight,
-        weightUnit: "GRAMS",
-      }),
-      // REQUIRED: Use option1 for the first (and only) option (Size)
+      // Use option1 for Size variant (Shopify GraphQL API format)
       option1: variant.size,
     };
+    
+    // Add optional fields only if they have valid values
+    if (variant.sku && variant.sku.trim()) {
+      variantInput.sku = variant.sku;
+    }
+    
+    if (variant.compareAtPrice > 0) {
+      variantInput.compareAtPrice = variant.compareAtPrice.toString();
+    }
+    
+    if (variant.weight > 0) {
+      variantInput.weight = variant.weight;
+      variantInput.weightUnit = "GRAMS";
+    }
+    
     return variantInput;
   });
 
-  // Build product input
+  // Build product input - start with minimal required fields only
   const input: any = {
     title: product.title,
-    bodyHtml: product.descriptionHtml, // Shopify uses 'bodyHtml' not 'descriptionHtml'
-    vendor: "EZProduct",
-    productType: "AI Generated",
-    // Tags should be a comma-separated string
-    tags: Array.isArray(product.tags) ? product.tags.join(", ") : product.tags,
-    // REQUIRED: Define product-level options (option names)
-    // This tells Shopify that this product has one option called "Size"
+    // Define product options BEFORE variants (required when using variant options)
     options: ["Size"],
     variants,
   };
 
-  // Add images if provided
-  if (imageUrls && imageUrls.length > 0) {
-    input.images = imageUrls.map((src) => ({ src }));
+  // Add description (bodyHtml) - sanitize if needed
+  if (product.descriptionHtml && product.descriptionHtml.trim()) {
+    // Ensure HTML is properly formatted (Shopify may reject malformed HTML)
+    input.bodyHtml = product.descriptionHtml.trim();
+  }
+  
+  // Add vendor and productType
+  input.vendor = "EZProduct";
+  input.productType = "AI Generated";
+  
+  // Add tags as comma-separated string (Shopify expects string, not array)
+  if (product.tags && product.tags.length > 0) {
+    const tagsString = Array.isArray(product.tags) 
+      ? product.tags.filter(t => t && t.trim()).join(", ") 
+      : String(product.tags);
+    if (tagsString) {
+      input.tags = tagsString;
+    }
   }
 
-  // Add SEO metadata if provided
-  if (product.seoTitle || product.seoDescription) {
-    input.seo = {
-      ...(product.seoTitle && { title: product.seoTitle }),
-      ...(product.seoDescription && { description: product.seoDescription }),
-    };
-  }
+  // Temporarily skip images and SEO to isolate the issue
+  // We'll add them back once basic product creation works
+  // if (imageUrls && imageUrls.length > 0) {
+  //   input.images = imageUrls.map((src) => ({ src }));
+  // }
+  // if (product.seoTitle || product.seoDescription) {
+  //   input.seo = {};
+  //   if (product.seoTitle) input.seo.title = product.seoTitle;
+  //   if (product.seoDescription) input.seo.description = product.seoDescription;
+  // }
 
   return input;
 }
