@@ -45,6 +45,7 @@ export async function createShopifyProduct(
 
   try {
     // Step 1: Create product with options (this creates the product + first default variant)
+    // Start with minimal input to isolate the issue
     const productInput = buildProductCreateInput(product, imageUrls);
     
     const createMutation = `
@@ -69,34 +70,85 @@ export async function createShopifyProduct(
     console.log("[Shopify Sync] Mutation String:", createMutation);
     console.log("[Shopify Sync] Variables:", JSON.stringify({ input: productInput }, null, 2));
     console.log("[Shopify Sync] Product Input (detailed):", JSON.stringify(productInput, null, 2));
+    console.log("[Shopify Sync] Session Shop:", session.shop);
+    console.log("[Shopify Sync] Session AccessToken (first 20 chars):", session.accessToken?.substring(0, 20) + "...");
     console.log("[Shopify Sync] ==========================================");
+    
+    // Try using direct HTTP request to get more detailed error information
+    // This bypasses the Shopify API client wrapper that might be hiding errors
+    const shopDomain = session.shop;
+    const graphqlUrl = `https://${shopDomain}/admin/api/${LATEST_API_VERSION}/graphql.json`;
+    
+    console.log("[Shopify Sync] GraphQL URL:", graphqlUrl);
     
     let createResponse: any;
     try {
-      createResponse = await client.request({
-        query: createMutation,
+      // Use Shopify GraphQL client - request method accepts query string and variables object
+      createResponse = await client.request(createMutation, {
         variables: {
           input: productInput,
         },
       });
+      console.log("[Shopify Sync] Request succeeded with Shopify client");
     } catch (requestError: any) {
-      console.error("[Shopify Sync] Request Error (caught):", requestError);
+      console.error("[Shopify Sync] Request Error (caught in inner try-catch):", requestError);
       console.error("[Shopify Sync] Request Error Type:", typeof requestError);
       console.error("[Shopify Sync] Request Error Keys:", Object.keys(requestError || {}));
+      console.error("[Shopify Sync] Request Error Message:", requestError?.message);
+      console.error("[Shopify Sync] Request Error Stack:", requestError?.stack);
+      
       if (requestError?.response) {
-        console.error("[Shopify Sync] Request Error Response:", JSON.stringify(requestError.response, null, 2));
+        console.error("[Shopify Sync] Request Error Response (full):", JSON.stringify(requestError.response, null, 2));
+        if (requestError.response.body) {
+          console.error("[Shopify Sync] Request Error Response Body:", JSON.stringify(requestError.response.body, null, 2));
+        }
       }
       if (requestError?.body) {
-        console.error("[Shopify Sync] Request Error Body:", JSON.stringify(requestError.body, null, 2));
+        console.error("[Shopify Sync] Request Error Body (direct):", JSON.stringify(requestError.body, null, 2));
       }
+      
+      // Try direct HTTP request to get raw response
+      try {
+        console.log("[Shopify Sync] Attempting direct HTTP request to get raw error...");
+        const directResponse = await fetch(graphqlUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': session.accessToken!,
+          },
+          body: JSON.stringify({
+            query: createMutation,
+            variables: {
+              input: productInput,
+            },
+          }),
+        });
+        
+        const directResponseText = await directResponse.text();
+        console.log("[Shopify Sync] Direct HTTP Response Status:", directResponse.status);
+        console.log("[Shopify Sync] Direct HTTP Response Headers:", Object.fromEntries(directResponse.headers.entries()));
+        console.log("[Shopify Sync] Direct HTTP Response Body (raw):", directResponseText);
+        
+        try {
+          const directResponseJson = JSON.parse(directResponseText);
+          console.log("[Shopify Sync] Direct HTTP Response Body (parsed):", JSON.stringify(directResponseJson, null, 2));
+        } catch (e) {
+          console.error("[Shopify Sync] Failed to parse direct response as JSON:", e);
+        }
+      } catch (directError: any) {
+        console.error("[Shopify Sync] Direct HTTP request also failed:", directError);
+      }
+      
       throw requestError;
     }
 
-    const createData = createResponse.body as any;
+    // Shopify GraphQL client may return data directly or wrapped in body
+    const createData = ((createResponse as any).body || createResponse) as any;
     console.log("[Shopify Sync] ========== FULL RESPONSE DETAILS ==========");
     console.log("[Shopify Sync] Response Object Keys:", Object.keys(createResponse || {}));
-    console.log("[Shopify Sync] Response Body (full):", JSON.stringify(createResponse.body, null, 2));
-    console.log("[Shopify Sync] Response Body Type:", typeof createResponse.body);
+    console.log("[Shopify Sync] Response (full):", JSON.stringify(createResponse, null, 2));
+    console.log("[Shopify Sync] Response Body (if exists):", JSON.stringify(createResponse.body, null, 2));
+    console.log("[Shopify Sync] Create Data (parsed):", JSON.stringify(createData, null, 2));
     console.log("[Shopify Sync] Has data?:", !!createData?.data);
     console.log("[Shopify Sync] Has errors?:", !!createData?.errors);
     if (createData?.data) {
@@ -163,15 +215,15 @@ export async function createShopifyProduct(
     console.log("[Shopify Sync] Step 2: Creating variants...");
     console.log("[Shopify Sync] Variants Input:", JSON.stringify(variantsInput, null, 2));
     
-    const variantsResponse = await client.request({
-      query: variantsMutation,
+    const variantsResponse = await client.request(variantsMutation, {
       variables: {
         productId: productId,
         variants: variantsInput,
       },
     });
 
-    const variantsData = variantsResponse.body as any;
+    // Shopify GraphQL client may return data directly or wrapped in body
+    const variantsData = ((variantsResponse as any).body || variantsResponse) as any;
     console.log("[Shopify Sync] Variants Create Response:", JSON.stringify(variantsData, null, 2));
 
     // Check for errors
