@@ -67,7 +67,6 @@ export async function createShopifyProduct(
       }
     }
   `;
-  `;
 
   try {
     const client = new shopify.clients.Graphql({ session });
