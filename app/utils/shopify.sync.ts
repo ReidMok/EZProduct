@@ -155,7 +155,8 @@ export async function createShopifyProduct(
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
   // Convert variants to Shopify format
-  // IMPORTANT: Shopify requires variants to have 'options' array with exactly one option value
+  // IMPORTANT: Shopify GraphQL API uses 'option1', 'option2', 'option3' fields for variant options
+  // NOT 'options' array. For a single Size option, we use 'option1'.
   const variants = product.variants.map((variant: ProductVariant) => {
     const variantInput: any = {
       price: variant.price.toString(),
@@ -167,8 +168,8 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
         weight: variant.weight,
         weightUnit: "GRAMS",
       }),
-      // REQUIRED: Each variant must have an options array with the variant size
-      options: [variant.size],
+      // REQUIRED: Use option1 for the first (and only) option (Size)
+      option1: variant.size,
     };
     return variantInput;
   });
@@ -181,6 +182,9 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     productType: "AI Generated",
     // Tags should be a comma-separated string
     tags: Array.isArray(product.tags) ? product.tags.join(", ") : product.tags,
+    // REQUIRED: Define product-level options (option names)
+    // This tells Shopify that this product has one option called "Size"
+    options: ["Size"],
     variants,
   };
 
