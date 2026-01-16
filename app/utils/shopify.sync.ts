@@ -48,7 +48,7 @@ export async function createShopifyProduct(
     const productInput = buildProductCreateInput(product, imageUrls);
     
     const createMutation = `
-      mutation productCreate($input: ProductCreateInput!) {
+      mutation productCreate($input: ProductInput!) {
         productCreate(input: $input) {
           product {
             id
@@ -76,20 +76,32 @@ export async function createShopifyProduct(
 
     const createData = createResponse.body as any;
     console.log("[Shopify Sync] Product Create Response:", JSON.stringify(createData, null, 2));
+    console.log("[Shopify Sync] Response Type:", typeof createData);
+    console.log("[Shopify Sync] Has data?:", !!createData.data);
+    console.log("[Shopify Sync] Has errors?:", !!createData.errors);
 
-    // Check for errors
+    // Check for GraphQL errors FIRST
     if (createData.errors && Array.isArray(createData.errors) && createData.errors.length > 0) {
-      const errorMessages = createData.errors.map((e: any) => e.message || String(e)).join("; ");
+      const errorMessages = createData.errors.map((e: any) => {
+        const msg = e.message || String(e);
+        const path = e.path ? ` (path: ${JSON.stringify(e.path)})` : "";
+        const locations = e.locations ? ` (line: ${e.locations[0]?.line}, column: ${e.locations[0]?.column})` : "";
+        return `${msg}${path}${locations}`;
+      }).join("; ");
+      console.error("[Shopify Sync] GraphQL Errors:", JSON.stringify(createData.errors, null, 2));
       throw new Error(`Shopify GraphQL errors: ${errorMessages}`);
     }
 
+    // Check for user errors
     if (createData.data?.productCreate?.userErrors?.length > 0) {
       const errors = createData.data.productCreate.userErrors;
       const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
+      console.error("[Shopify Sync] User Errors:", JSON.stringify(errors, null, 2));
       throw new Error(`Shopify API user errors: ${errorMessages}`);
     }
 
     if (!createData.data?.productCreate?.product) {
+      console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(createData, null, 2));
       throw new Error("Failed to create product: No product returned");
     }
 
@@ -244,53 +256,41 @@ export async function createShopifyProduct(
 }
 
 /**
- * Build ProductCreateInput for productCreate mutation
+ * Build ProductInput for productCreate mutation
  * This creates the product and defines options, but only creates the first default variant
+ * Note: Using minimal fields first to isolate issues
  */
 function buildProductCreateInput(product: GeneratedProduct, imageUrls?: string[]) {
-  // Extract all unique variant sizes for the productOptions
-  const sizeValues = product.variants.map(v => v.size);
-  
-  // Build ProductCreateInput
+  // Start with absolute minimum required fields
   const input: any = {
     title: product.title,
-    // Define product options using productOptions (not just "options")
-    // Format: [{ name: "Size", values: ["6inch", "8inch", "10inch"] }]
-    productOptions: [
-      {
-        name: "Size",
-        values: sizeValues,
-      },
-    ],
   };
 
-  // Add description (ProductCreateInput uses descriptionHtml)
+  // Add description (try bodyHtml first, which is the standard field)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
-    input.descriptionHtml = product.descriptionHtml.trim();
+    input.bodyHtml = product.descriptionHtml.trim();
   }
   
-  // Add vendor and productType
+  // Add vendor and productType (optional but recommended)
   input.vendor = "EZProduct";
   input.productType = "AI Generated";
   
-  // Add tags as array (ProductCreateInput expects array of strings)
+  // Add tags as comma-separated string
   if (product.tags && product.tags.length > 0) {
-    input.tags = Array.isArray(product.tags) 
-      ? product.tags.filter(t => t && t.trim())
-      : [String(product.tags)];
+    const tagsString = Array.isArray(product.tags) 
+      ? product.tags.filter(t => t && t.trim()).join(", ")
+      : String(product.tags);
+    if (tagsString) {
+      input.tags = tagsString;
+    }
   }
 
-  // Add images if provided
-  if (imageUrls && imageUrls.length > 0) {
-    input.media = imageUrls.map((src) => ({ originalSource: src }));
-  }
+  // Define product options - this tells Shopify the product has a "Size" option
+  // We'll create variants separately using productVariantsBulkCreate
+  input.options = ["Size"];
 
-  // Add SEO metadata if provided
-  if (product.seoTitle || product.seoDescription) {
-    input.seo = {};
-    if (product.seoTitle) input.seo.title = product.seoTitle;
-    if (product.seoDescription) input.seo.description = product.seoDescription;
-  }
+  // Temporarily skip images and SEO to isolate the issue
+  // We'll add them back once basic product creation works
 
   return input;
 }
