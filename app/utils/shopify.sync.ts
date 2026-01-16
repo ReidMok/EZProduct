@@ -136,28 +136,57 @@ export async function createShopifyProduct(
     
     const errAny = error as any;
     
-    // Try to extract more details from the error
-    if (errAny?.response) {
-      console.error("[Shopify Sync] Error Response:", {
-        status: errAny.response.statusCode || errAny.response.status,
-        statusText: errAny.response.statusText,
-        body: errAny.response.body,
-        headers: errAny.response.headers,
-      });
+    // Try to extract more details from the error response
+    let detailedError = "";
+    
+    if (errAny?.response?.body) {
+      const responseBody = errAny.response.body;
+      console.error("[Shopify Sync] Response Body:", JSON.stringify(responseBody, null, 2));
+      
+      // Try to extract GraphQL errors from response body
+      if (responseBody.errors) {
+        if (Array.isArray(responseBody.errors)) {
+          detailedError = responseBody.errors.map((e: any) => e.message || String(e)).join("; ");
+        } else if (responseBody.errors.message) {
+          detailedError = responseBody.errors.message;
+        }
+      }
+      
+      // Try to extract userErrors if present
+      if (responseBody.data?.productSet?.userErrors) {
+        const userErrors = responseBody.data.productSet.userErrors;
+        detailedError = userErrors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
+      }
     }
     
-    if (errAny?.networkStatusCode || errAny?.message) {
+    // Try to extract from error object directly
+    if (!detailedError && errAny?.body) {
+      const body = errAny.body;
+      if (body.errors) {
+        if (Array.isArray(body.errors)) {
+          detailedError = body.errors.map((e: any) => e.message || String(e)).join("; ");
+        } else if (body.errors.message) {
+          detailedError = body.errors.message;
+        }
+      }
+    }
+    
+    // Build final error message
+    const baseMessage = errAny?.message || (error instanceof Error ? error.message : "Unknown error");
+    const statusCode = errAny?.networkStatusCode || errAny?.response?.code || errAny?.response?.statusCode;
+    
+    if (detailedError) {
       throw new Error(
-        `Failed to sync product to Shopify: Received an error response (${errAny.networkStatusCode || "Unknown"}) from Shopify: ${JSON.stringify({
-          networkStatusCode: errAny.networkStatusCode,
-          message: errAny.message,
-          response: errAny.response,
-        })}`
+        `Failed to sync product to Shopify (${statusCode || "Unknown"}): ${detailedError}`
+      );
+    } else if (statusCode) {
+      throw new Error(
+        `Failed to sync product to Shopify: Received an error response (${statusCode}) from Shopify: ${baseMessage}`
       );
     }
 
     throw new Error(
-      `Failed to sync product to Shopify: ${error instanceof Error ? error.message : "Unknown error"}`
+      `Failed to sync product to Shopify: ${baseMessage}`
     );
   }
 }
@@ -194,35 +223,39 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
 
   // Build productSet input
   // productSet uses a nested 'product' object structure
+  // Start with minimal required fields
   const productData: any = {
     title: product.title,
-    // Define product options
+    // Define product options (required when using variants with options)
     options: ["Size"],
     variants,
   };
 
-  // Add description (descriptionHtml for productSet)
+  // Add description (productSet uses descriptionHtml)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
     productData.descriptionHtml = product.descriptionHtml.trim();
   }
   
-  // Add vendor and productType
+  // Add vendor and productType (optional but recommended)
   productData.vendor = "EZProduct";
   productData.productType = "AI Generated";
   
-  // Add tags as array (productSet expects array, not string)
+  // Add tags as string array (productSet expects array of strings)
   if (product.tags && product.tags.length > 0) {
-    productData.tags = Array.isArray(product.tags) 
+    const tagsArray = Array.isArray(product.tags) 
       ? product.tags.filter(t => t && t.trim())
       : [String(product.tags)];
+    if (tagsArray.length > 0) {
+      productData.tags = tagsArray;
+    }
   }
 
-  // Add images if provided
+  // Add images if provided (productSet format)
   if (imageUrls && imageUrls.length > 0) {
     productData.images = imageUrls.map((src) => ({ src }));
   }
 
-  // Add SEO metadata if provided
+  // Add SEO metadata if provided (productSet format)
   if (product.seoTitle || product.seoDescription) {
     productData.seo = {};
     if (product.seoTitle) productData.seo.title = product.seoTitle;

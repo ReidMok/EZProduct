@@ -125,6 +125,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.error("[App Action] Error stack:", error instanceof Error ? error.stack : "No stack trace");
 
     // Save failed attempt to database
+    // Note: We need to provide a title even for failed attempts
+    let generatedTitle = keywords.trim(); // Use keywords as fallback title
+    
+    // Try to extract title from error if AI generation succeeded but Shopify sync failed
+    try {
+      // If error message contains product info, we might have a generated product
+      // For now, we'll use keywords as title
+    } catch (e) {
+      // Ignore
+    }
+
     try {
       const shopRecord = await prisma.shop.upsert({
         where: { shop: session.shop },
@@ -144,12 +155,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           shopId: shopRecord.id,
           keywords: keywords.trim(),
           imageUrl: imageUrl || null,
+          title: generatedTitle, // Required field - use keywords as fallback
+          descriptionHtml: "<p>Failed to generate</p>", // Required field - minimal HTML
+          tags: "", // Required field - empty string
+          variantsJson: "[]", // Required field - empty array
           status: "failed",
           errorMessage: error instanceof Error ? error.message : "Unknown error",
         },
       });
     } catch (dbError) {
-      console.error("Failed to save error to database:", dbError);
+      console.error("[App Action] Failed to save error to database:", dbError);
     }
 
     return redirect(
