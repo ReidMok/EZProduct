@@ -12,7 +12,25 @@ if (!GEMINI_API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+
+function getModelCandidates(): string[] {
+  const candidates = [
+    process.env.GEMINI_MODEL,
+    // Common Gemini model identifiers (Google has changed naming/availability over time)
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+  ].filter(Boolean) as string[];
+
+  // De-dup while preserving order
+  return [...new Set(candidates)];
+}
+
+function getModel(name: string) {
+  return genAI.getGenerativeModel({ model: name });
+}
 
 export interface ProductVariant {
   size: string; // e.g., "6inch", "8inch", "10inch"
@@ -35,7 +53,7 @@ export interface GeneratedProduct {
 
 /**
  * Generate product information using AI
- * @param keywords - Product keywords (e.g., "Scuba Diver Resin Lamp")
+ * @param keywords - Product keywords (e.g., "Minimalist Ceramic Coffee Mug")
  * @param imageUrl - Optional image URL for image-based generation
  * @returns Generated product data
  */
@@ -46,23 +64,56 @@ export async function generateProduct(
   const prompt = buildPrompt(keywords, imageUrl);
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const modelCandidates = getModelCandidates();
+    let lastError: unknown;
 
-    // Parse JSON from AI response
-    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || 
-                     text.match(/\{[\s\S]*\}/);
-    
-    if (!jsonMatch) {
-      throw new Error("Failed to parse AI response as JSON");
+    for (const modelName of modelCandidates) {
+      try {
+        const model = getModel(modelName);
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // Parse JSON from AI response
+        const jsonMatch =
+          text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/\{[\s\S]*\}/);
+
+        if (!jsonMatch) {
+          throw new Error("Failed to parse AI response as JSON");
+        }
+
+        const jsonStr = jsonMatch[1] || jsonMatch[0];
+        const productData = JSON.parse(jsonStr);
+
+        // Validate and format the response
+        return validateAndFormatProduct(productData);
+      } catch (err) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+
+        // If the model name is invalid / not supported, try the next candidate.
+        const isModelNotFound =
+          /404\s*not\s*found/i.test(msg) ||
+          /model.*not\s*found/i.test(msg) ||
+          /is\s+not\s+supported\s+for\s+generateContent/i.test(msg);
+
+        if (isModelNotFound) {
+          console.warn(
+            `[AI] Model "${modelName}" not available for generateContent. Trying next...`
+          );
+          continue;
+        }
+
+        // For other errors (quota/auth/network), fail fast.
+        throw err;
+      }
     }
 
-    const jsonStr = jsonMatch[1] || jsonMatch[0];
-    const productData = JSON.parse(jsonStr);
+    throw new Error(
+      `No available Gemini model found. Tried: ${modelCandidates.join(", ")}. ` +
+        `Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    );
 
-    // Validate and format the response
-    return validateAndFormatProduct(productData);
   } catch (error) {
     console.error("AI Generation Error:", error);
     throw new Error(`Failed to generate product: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -73,7 +124,7 @@ export async function generateProduct(
  * Build the AI prompt for product generation
  */
 function buildPrompt(keywords: string, imageUrl?: string): string {
-  const basePrompt = `You are an expert e-commerce product description writer specializing in resin art products, particularly diver-themed resin lamps and ocean-inspired decorative items.
+  const basePrompt = `You are an expert e-commerce product listing writer for general consumer products across multiple categories (home, lifestyle, fitness, pets, accessories, etc.).
 
 Generate a complete product listing in JSON format for: "${keywords}"
 
@@ -90,7 +141,7 @@ Requirements:
    - 8inch variant: 8inch*6inch*2inch (20cm*15cm*5cm) - Medium price (+20-30%)
    - 10inch variant: 10inch*7inch*2.5inch (25cm*18cm*6cm) - Premium price (+40-50%)
    Each variant must include: size, sizeCm, sizeInch, price (USD), compareAtPrice (2-3x price), sku (format: BJ140XXX-size), weight (in grams)
-4. Tags: Generate 15-25 relevant tags including: anniversary_gift, Arts_and_crafts, bedroom_mood_light, best_friend_gift, Christmas_ornaments, diver resin table lamp, Epoxy_Resin_Lamp, home_decor, Night_Light_Lamp, resin_art, table lamp, Valentine_day_gift, wedding_gifts, etc.
+4. Tags: Generate 15-25 relevant tags including: gift_idea, new_arrival, bestseller, home_lifestyle, minimalist_style, holiday_gift, etc.
 5. SEO: Generate SEO title and description (150-160 characters for description)
 
 Return ONLY valid JSON in this exact format:
