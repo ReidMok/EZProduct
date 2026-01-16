@@ -18,8 +18,6 @@ export default defineConfig({
   ssr: {
     noExternal: [
       "@shopify/polaris",
-      "@shopify/app-bridge",
-      "@shopify/app-bridge-react",
     ],
   },
   server: {
