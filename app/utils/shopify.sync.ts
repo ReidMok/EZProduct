@@ -4,7 +4,7 @@
  */
 
 import "@shopify/shopify-api/adapters/node";
-import { shopifyApi, LATEST_API_VERSION } from "@shopify/shopify-api";
+import { Session, shopifyApi, LATEST_API_VERSION } from "@shopify/shopify-api";
 import type { GeneratedProduct, ProductVariant } from "./ai.generator";
 
 interface ShopifyConfig {
@@ -37,10 +37,15 @@ export async function createShopifyProduct(
   imageUrls?: string[]
 ): Promise<{ productId: string; productHandle: string }> {
   const shopify = getShopifyClient(config);
-  const session = {
+  // IMPORTANT: Shopify GraphQL client expects a Session instance (not a plain object)
+  const session = new Session({
+    id: `offline_${config.shop}`,
     shop: config.shop,
+    state: "",
+    isOnline: false,
     accessToken: config.accessToken,
-  };
+    scope: process.env.SCOPES,
+  });
 
   // Build product input
   const productInput = buildProductInput(product, imageUrls);
@@ -61,6 +66,7 @@ export async function createShopifyProduct(
         }
       }
     }
+  `;
   `;
 
   try {
@@ -112,22 +118,17 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     sku: variant.sku,
     weight: variant.weight,
     weightUnit: "GRAMS",
+    // Keep variant input minimal to avoid schema/version mismatches that can cause HTTP 400.
+    // Inventory/location should be managed separately after product creation.
     inventoryPolicy: "CONTINUE",
-    inventoryManagement: "SHOPIFY",
-    inventoryQuantities: [
-      {
-        availableQuantity: 100,
-        locationId: "gid://shopify/Location/1", // Default location, should be fetched dynamically
-      },
-    ],
   }));
 
   // Build product input
   const input: any = {
     title: product.title,
     descriptionHtml: product.descriptionHtml,
-    vendor: "RESIN MEMORY",
-    productType: "OCEAN ART",
+    vendor: "EZProduct",
+    productType: "AI Generated",
     tags: product.tags,
     status: "ACTIVE",
     variants: variants,
