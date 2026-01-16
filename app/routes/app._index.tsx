@@ -58,15 +58,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log("[App Action] Request URL:", request.url);
   console.log("[App Action] Request Method:", request.method);
   
+  // Store variables in outer scope so catch block can access them
+  let session: any = null;
+  let admin: any = null;
+  let keywords: string = "";
+  let imageUrl: string | null = null;
+  
   try {
-    const { session, admin } = await shopify.authenticate.admin(request);
+    const authResult = await shopify.authenticate.admin(request);
+    session = authResult.session;
+    admin = authResult.admin;
+    
     console.log("[App Action] Authentication successful. Shop:", session.shop);
     console.log("[App Action] Admin object available:", !!admin);
     console.log("[App Action] Admin.graphql available:", !!(admin && admin.graphql));
     
     const formData = await request.formData();
-    const keywords = formData.get("keywords") as string;
-    const imageUrl = formData.get("imageUrl") as string | null;
+    keywords = (formData.get("keywords") as string) || "";
+    imageUrl = formData.get("imageUrl") as string | null;
 
     console.log("[App Action] Form data received. Keywords:", keywords?.substring(0, 50) + "...");
 
@@ -157,23 +166,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Try to save failed attempt to database (only if we have session and keywords)
+    // Note: session and keywords are already available in outer scope
     try {
-      // Get session and formData again if they're not available
-      let session: any;
-      let keywords: string = "";
-      let imageUrl: string | null = null;
-      
-      try {
-        const authResult = await shopify.authenticate.admin(request);
-        session = authResult.session;
-        const formData = await request.formData();
-        keywords = (formData.get("keywords") as string) || "";
-        imageUrl = formData.get("imageUrl") as string | null;
-      } catch (authError) {
-        console.error("[App Action] Could not get session for error logging:", authError);
-        // Continue without saving to database
-      }
-
       if (session && keywords) {
         const shopRecord = await prisma.shop.upsert({
           where: { shop: session.shop },
