@@ -2,8 +2,8 @@
  * Main App Route - Product Generation Interface
  */
 
-import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
-import { useActionData, useLoaderData, useNavigation, Form } from "@remix-run/react";
+import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
+import { useLoaderData, useNavigation, Form, useSearchParams } from "@remix-run/react";
 import { useState } from "react";
 import {
   Page,
@@ -35,7 +35,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.log(`[App Loader] Calling shopify.authenticate.admin...`);
     const { session } = await shopify.authenticate.admin(request);
     console.log(`[App Loader] Successfully authenticated. Shop: ${session.shop}`);
-    return json({ shop: session.shop });
+    const url = new URL(request.url);
+    const result = url.searchParams.get("result");
+    const productId = url.searchParams.get("productId");
+    const message = url.searchParams.get("message");
+    return json({ shop: session.shop, result, productId, message });
   } catch (error) {
     // If it's a Response (redirect), let it through - this is the OAuth flow
     if (error instanceof Response) {
@@ -56,10 +60,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const imageUrl = formData.get("imageUrl") as string | null;
 
   if (!keywords || keywords.trim() === "") {
-    return json(
-      { error: "Please enter product keywords" },
-      { status: 400 }
-    );
+    return redirect(`/app?result=error&message=${encodeURIComponent("Please enter product keywords")}`);
   }
 
   try {
@@ -67,9 +68,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const generatedProduct = await generateProduct(keywords.trim(), imageUrl || undefined);
 
     // Step 2: Sync to Shopify
+    // Pass the session directly from shopify.authenticate.admin()
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
       accessToken: session.accessToken!,
+      session: session, // Pass the actual Session instance
     });
 
     // Step 3: Save to database
@@ -103,40 +106,54 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return json({
-      success: true,
-      productId: shopifyResult.productId,
-      productHandle: shopifyResult.productHandle,
-      message: "Product generated and synced successfully!",
-    });
+    // PRG pattern: redirect back to /app so Shopify iframe won't show raw JSON or a blank "200" page
+    return redirect(
+      `/app?result=success&productId=${encodeURIComponent(shopifyResult.productId)}&message=${encodeURIComponent(
+        "Product generated and synced successfully!"
+      )}`
+    );
   } catch (error) {
     console.error("Action Error:", error);
 
     // Save failed attempt to database
-    await prisma.productGeneration.create({
-      data: {
-        shopId: session.shop,
-        keywords: keywords.trim(),
-        imageUrl: imageUrl || null,
-        status: "failed",
-        errorMessage: error instanceof Error ? error.message : "Unknown error",
-      },
-    }).catch((dbError) => {
-      console.error("Failed to save error to database:", dbError);
-    });
+    try {
+      const shopRecord = await prisma.shop.upsert({
+        where: { shop: session.shop },
+        update: {
+          accessToken: session.accessToken!,
+          scope: session.scope ?? "",
+        },
+        create: {
+          shop: session.shop,
+          accessToken: session.accessToken!,
+          scope: session.scope ?? "",
+        },
+      });
 
-    return json(
-      {
-        error: error instanceof Error ? error.message : "Failed to generate product",
-      },
-      { status: 500 }
+      await prisma.productGeneration.create({
+        data: {
+          shopId: shopRecord.id,
+          keywords: keywords.trim(),
+          imageUrl: imageUrl || null,
+          status: "failed",
+          errorMessage: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+    } catch (dbError) {
+      console.error("Failed to save error to database:", dbError);
+    }
+
+    return redirect(
+      `/app?result=error&message=${encodeURIComponent(
+        error instanceof Error ? error.message : "Failed to generate product"
+      )}`
     );
   }
 };
 
 export default function Index() {
-  const { shop } = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
+  const { shop, result, productId, message } = useLoaderData<typeof loader>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
 
   const isSubmitting = navigation.state === "submitting";
@@ -149,23 +166,23 @@ export default function Index() {
       subtitle="Generate complete product listings with AI and sync to your store"
     >
       <BlockStack gap="500">
-        {actionData?.error && (
+        {result === "error" && message && (
           <Banner status="critical" title="Error">
-            <p>{actionData.error}</p>
+            <p>{message}</p>
           </Banner>
         )}
 
-        {actionData?.success && (
+        {result === "success" && productId && (
           <Banner
             status="success"
             title="Success!"
             action={{
               content: "View Product",
-              url: `https://${shop}/admin/products/${actionData.productId}`,
+              url: `https://${shop}/admin/products/${productId}`,
               external: true,
             }}
           >
-            <p>{actionData.message}</p>
+            <p>{message || "Product generated and synced successfully!"}</p>
           </Banner>
         )}
 

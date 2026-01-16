@@ -10,17 +10,19 @@ import type { GeneratedProduct, ProductVariant } from "./ai.generator";
 interface ShopifyConfig {
   shop: string;
   accessToken: string;
+  session: Session; // Pass the actual session from shopify.authenticate.admin()
 }
 
 /**
  * Initialize Shopify API client
+ * IMPORTANT: Use the same configuration as shopify.server.ts
  */
-function getShopifyClient(config: ShopifyConfig) {
+function getShopifyClient() {
   const shopify = shopifyApi({
     apiKey: process.env.SHOPIFY_API_KEY!,
     apiSecretKey: process.env.SHOPIFY_API_SECRET!,
     scopes: process.env.SCOPES?.split(",") || ["write_products", "read_products"],
-    hostName: process.env.SHOPIFY_APP_URL?.replace("https://", "") || "",
+    hostName: process.env.SHOPIFY_APP_URL?.replace("https://", "").replace("http://", "") || "",
     apiVersion: LATEST_API_VERSION,
     isEmbeddedApp: true,
   });
@@ -36,24 +38,21 @@ export async function createShopifyProduct(
   config: ShopifyConfig,
   imageUrls?: string[]
 ): Promise<{ productId: string; productHandle: string }> {
-  const shopify = getShopifyClient(config);
-  // IMPORTANT: Shopify GraphQL client expects a Session instance (not a plain object)
-  const session = new Session({
-    id: `offline_${config.shop}`,
-    shop: config.shop,
-    state: "",
-    isOnline: false,
-    accessToken: config.accessToken,
-    scope: process.env.SCOPES,
-  });
+  const shopify = getShopifyClient();
+  // IMPORTANT: Use the session passed from shopify.authenticate.admin()
+  // This ensures we're using the correct session with proper authentication
+  const session = config.session;
 
   // Build product input
   const productInput = buildProductInput(product, imageUrls);
 
   // GraphQL Mutation
+  // IMPORTANT: Use productSet instead of productCreate
+  // productSet supports creating products with variants (price, sku, etc.) in one call
+  // productCreate only supports basic product info, not full variant details
   const mutation = `
-    mutation productCreate($input: ProductInput!) {
-      productCreate(input: $input) {
+    mutation productSet($input: ProductSetInput!) {
+      productSet(input: $input) {
         product {
           id
           handle
@@ -104,8 +103,9 @@ export async function createShopifyProduct(
     }
 
     // Check for GraphQL user errors (these are business logic errors)
-    if (data.data?.productCreate?.userErrors?.length > 0) {
-      const errors = data.data.productCreate.userErrors;
+    // productSet returns userErrors in the same structure
+    if (data.data?.productSet?.userErrors?.length > 0) {
+      const errors = data.data.productSet.userErrors;
       const errorMessages = errors.map((e: any) => {
         const field = e.field ? `[${e.field}] ` : "";
         return `${field}${e.message}`;
@@ -115,12 +115,12 @@ export async function createShopifyProduct(
     }
 
     // Check if product was created
-    if (!data.data?.productCreate?.product) {
+    if (!data.data?.productSet?.product) {
       console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(data, null, 2));
       throw new Error("Failed to create product: No product returned in response");
     }
 
-    const createdProduct = data.data.productCreate.product;
+    const createdProduct = data.data.productSet.product;
 
     return {
       productId: createdProduct.id,
@@ -164,14 +164,14 @@ export async function createShopifyProduct(
 
 /**
  * Build Shopify product input from generated product data
+ * Uses productSet format which supports creating products with full variant details
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
-  // Convert variants to Shopify format
-  // Start with minimal required fields to avoid validation errors
+  // Convert variants to Shopify productSet format
   const variants = product.variants.map((variant: ProductVariant) => {
     const variantInput: any = {
       price: variant.price.toString(),
-      // Use option1 for Size variant (Shopify GraphQL API format)
+      // Use option1 for Size variant
       option1: variant.size,
     };
     
@@ -192,46 +192,47 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     return variantInput;
   });
 
-  // Build product input - start with minimal required fields only
-  const input: any = {
+  // Build productSet input
+  // productSet uses a nested 'product' object structure
+  const productData: any = {
     title: product.title,
-    // Define product options BEFORE variants (required when using variant options)
+    // Define product options
     options: ["Size"],
     variants,
   };
 
-  // Add description (bodyHtml) - sanitize if needed
+  // Add description (descriptionHtml for productSet)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
-    // Ensure HTML is properly formatted (Shopify may reject malformed HTML)
-    input.bodyHtml = product.descriptionHtml.trim();
+    productData.descriptionHtml = product.descriptionHtml.trim();
   }
   
   // Add vendor and productType
-  input.vendor = "EZProduct";
-  input.productType = "AI Generated";
+  productData.vendor = "EZProduct";
+  productData.productType = "AI Generated";
   
-  // Add tags as comma-separated string (Shopify expects string, not array)
+  // Add tags as array (productSet expects array, not string)
   if (product.tags && product.tags.length > 0) {
-    const tagsString = Array.isArray(product.tags) 
-      ? product.tags.filter(t => t && t.trim()).join(", ") 
-      : String(product.tags);
-    if (tagsString) {
-      input.tags = tagsString;
-    }
+    productData.tags = Array.isArray(product.tags) 
+      ? product.tags.filter(t => t && t.trim())
+      : [String(product.tags)];
   }
 
-  // Temporarily skip images and SEO to isolate the issue
-  // We'll add them back once basic product creation works
-  // if (imageUrls && imageUrls.length > 0) {
-  //   input.images = imageUrls.map((src) => ({ src }));
-  // }
-  // if (product.seoTitle || product.seoDescription) {
-  //   input.seo = {};
-  //   if (product.seoTitle) input.seo.title = product.seoTitle;
-  //   if (product.seoDescription) input.seo.description = product.seoDescription;
-  // }
+  // Add images if provided
+  if (imageUrls && imageUrls.length > 0) {
+    productData.images = imageUrls.map((src) => ({ src }));
+  }
 
-  return input;
+  // Add SEO metadata if provided
+  if (product.seoTitle || product.seoDescription) {
+    productData.seo = {};
+    if (product.seoTitle) productData.seo.title = product.seoTitle;
+    if (product.seoDescription) productData.seo.description = product.seoDescription;
+  }
+
+  // productSet expects input with a 'product' field
+  return {
+    product: productData,
+  };
 }
 
 /**
