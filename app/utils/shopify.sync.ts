@@ -47,12 +47,11 @@ export async function createShopifyProduct(
   const productInput = buildProductInput(product, imageUrls);
 
   // GraphQL Mutation
-  // IMPORTANT: Use productSet instead of productCreate
-  // productSet supports creating products with variants (price, sku, etc.) in one call
-  // productCreate only supports basic product info, not full variant details
+  // Use productCreate with variants - this is the standard approach
+  // Note: productCreate supports variants with price, sku, etc. in the input
   const mutation = `
-    mutation productSet($input: ProductSetInput!) {
-      productSet(input: $input) {
+    mutation productCreate($input: ProductInput!) {
+      productCreate(input: $input) {
         product {
           id
           handle
@@ -103,9 +102,8 @@ export async function createShopifyProduct(
     }
 
     // Check for GraphQL user errors (these are business logic errors)
-    // productSet returns userErrors in the same structure
-    if (data.data?.productSet?.userErrors?.length > 0) {
-      const errors = data.data.productSet.userErrors;
+    if (data.data?.productCreate?.userErrors?.length > 0) {
+      const errors = data.data.productCreate.userErrors;
       const errorMessages = errors.map((e: any) => {
         const field = e.field ? `[${e.field}] ` : "";
         return `${field}${e.message}`;
@@ -115,12 +113,12 @@ export async function createShopifyProduct(
     }
 
     // Check if product was created
-    if (!data.data?.productSet?.product) {
+    if (!data.data?.productCreate?.product) {
       console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(data, null, 2));
       throw new Error("Failed to create product: No product returned in response");
     }
 
-    const createdProduct = data.data.productSet.product;
+    const createdProduct = data.data.productCreate.product;
 
     return {
       productId: createdProduct.id,
@@ -153,8 +151,8 @@ export async function createShopifyProduct(
       }
       
       // Try to extract userErrors if present
-      if (responseBody.data?.productSet?.userErrors) {
-        const userErrors = responseBody.data.productSet.userErrors;
+      if (responseBody.data?.productCreate?.userErrors) {
+        const userErrors = responseBody.data.productCreate.userErrors;
         detailedError = userErrors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
       }
     }
@@ -193,14 +191,14 @@ export async function createShopifyProduct(
 
 /**
  * Build Shopify product input from generated product data
- * Uses productSet format which supports creating products with full variant details
+ * Uses ProductInput format for productCreate mutation
  */
 function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
-  // Convert variants to Shopify productSet format
+  // Convert variants to Shopify ProductInput format
   const variants = product.variants.map((variant: ProductVariant) => {
     const variantInput: any = {
       price: variant.price.toString(),
-      // Use option1 for Size variant
+      // Use option1 for Size variant (ProductInput format)
       option1: variant.size,
     };
     
@@ -221,51 +219,46 @@ function buildProductInput(product: GeneratedProduct, imageUrls?: string[]) {
     return variantInput;
   });
 
-  // Build productSet input
-  // productSet uses a nested 'product' object structure
-  // Start with minimal required fields
-  const productData: any = {
+  // Build ProductInput (direct format, not nested)
+  const input: any = {
     title: product.title,
     // Define product options (required when using variants with options)
     options: ["Size"],
     variants,
   };
 
-  // Add description (productSet uses descriptionHtml)
+  // Add description (ProductInput uses bodyHtml, not descriptionHtml)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
-    productData.descriptionHtml = product.descriptionHtml.trim();
+    input.bodyHtml = product.descriptionHtml.trim();
   }
   
-  // Add vendor and productType (optional but recommended)
-  productData.vendor = "EZProduct";
-  productData.productType = "AI Generated";
+  // Add vendor and productType
+  input.vendor = "EZProduct";
+  input.productType = "AI Generated";
   
-  // Add tags as string array (productSet expects array of strings)
+  // Add tags as comma-separated string (ProductInput expects string, not array)
   if (product.tags && product.tags.length > 0) {
-    const tagsArray = Array.isArray(product.tags) 
-      ? product.tags.filter(t => t && t.trim())
-      : [String(product.tags)];
-    if (tagsArray.length > 0) {
-      productData.tags = tagsArray;
+    const tagsString = Array.isArray(product.tags) 
+      ? product.tags.filter(t => t && t.trim()).join(", ")
+      : String(product.tags);
+    if (tagsString) {
+      input.tags = tagsString;
     }
   }
 
-  // Add images if provided (productSet format)
+  // Add images if provided
   if (imageUrls && imageUrls.length > 0) {
-    productData.images = imageUrls.map((src) => ({ src }));
+    input.images = imageUrls.map((src) => ({ src }));
   }
 
-  // Add SEO metadata if provided (productSet format)
+  // Add SEO metadata if provided
   if (product.seoTitle || product.seoDescription) {
-    productData.seo = {};
-    if (product.seoTitle) productData.seo.title = product.seoTitle;
-    if (product.seoDescription) productData.seo.description = product.seoDescription;
+    input.seo = {};
+    if (product.seoTitle) input.seo.title = product.seoTitle;
+    if (product.seoDescription) input.seo.description = product.seoDescription;
   }
 
-  // productSet expects input with a 'product' field
-  return {
-    product: productData,
-  };
+  return input;
 }
 
 /**
