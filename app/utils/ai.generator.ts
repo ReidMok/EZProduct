@@ -16,12 +16,17 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 function getModelCandidates(): string[] {
   const candidates = [
     process.env.GEMINI_MODEL,
-    // Common Gemini model identifiers (Google has changed naming/availability over time)
+    // Try latest stable models first
     "gemini-1.5-pro-latest",
-    "gemini-1.5-pro",
     "gemini-1.5-flash-latest",
+    // Then try specific versions
+    "gemini-1.5-pro",
     "gemini-1.5-flash",
+    // Try newer models
     "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    // Fallback to older stable model
+    "gemini-pro",
   ].filter(Boolean) as string[];
 
   // De-dup while preserving order
@@ -90,33 +95,58 @@ export async function generateProduct(
       } catch (err) {
         lastError = err;
         const msg = err instanceof Error ? err.message : String(err);
+        const errStr = String(err).toLowerCase();
 
-        // If the model name is invalid / not supported, try the next candidate.
+        // Enhanced error detection for model not available errors
         const isModelNotFound =
           /404\s*not\s*found/i.test(msg) ||
           /model.*not\s*found/i.test(msg) ||
-          /is\s+not\s+supported\s+for\s+generateContent/i.test(msg);
+          /is\s+not\s+supported\s+for\s+generateContent/i.test(msg) ||
+          /model.*not\s+available/i.test(msg) ||
+          /not\s+available\s+for\s+generateContent/i.test(msg) ||
+          errStr.includes("not available") ||
+          errStr.includes("model not found") ||
+          errStr.includes("invalid model");
 
         if (isModelNotFound) {
           console.warn(
-            `[AI] Model "${modelName}" not available for generateContent. Trying next...`
+            `[AI] Model "${modelName}" not available for generateContent. Error: ${msg}. Trying next model...`
           );
           continue;
         }
 
-        // For other errors (quota/auth/network), fail fast.
-        throw err;
+        // Log other errors but continue trying next model if it's a model-related error
+        console.error(`[AI] Error with model "${modelName}":`, err);
+        
+        // For quota/auth/network errors, fail fast
+        const isFatalError = 
+          /quota/i.test(msg) ||
+          /unauthorized/i.test(msg) ||
+          /authentication/i.test(msg) ||
+          /api\s*key/i.test(msg);
+
+        if (isFatalError) {
+          throw err;
+        }
+
+        // For other errors, try next model
+        continue;
       }
     }
 
+    // If we've exhausted all models, throw a clear error
+    const errorMsg = lastError instanceof Error ? lastError.message : String(lastError);
     throw new Error(
-      `No available Gemini model found. Tried: ${modelCandidates.join(", ")}. ` +
-        `Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+      `No available Gemini model found. Tried models: ${modelCandidates.join(", ")}. ` +
+        `Last error: ${errorMsg}. ` +
+        `Please check your GEMINI_API_KEY and GEMINI_MODEL environment variables, or try a different API key.`
     );
 
   } catch (error) {
-    console.error("AI Generation Error:", error);
-    throw new Error(`Failed to generate product: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error("[AI Generator] Final Error:", error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error("[AI Generator] Error Message:", errorMessage);
+    throw new Error(`Failed to generate product: ${errorMessage}`);
   }
 }
 
