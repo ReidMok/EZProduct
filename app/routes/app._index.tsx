@@ -54,7 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await shopify.authenticate.admin(request);
+  const { session, admin } = await shopify.authenticate.admin(request);
   const formData = await request.formData();
   const keywords = formData.get("keywords") as string;
   const imageUrl = formData.get("imageUrl") as string | null;
@@ -77,6 +77,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shop: session.shop,
       accessToken: session.accessToken!,
       session: session, // Pass the actual Session instance
+      admin: admin, // Pass the admin object from Shopify App Remix
     });
     console.log("[App Action] Shopify sync completed. Product ID:", shopifyResult.productId);
     console.log("[App Action] Product Handle:", shopifyResult.productHandle);

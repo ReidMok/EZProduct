@@ -3,45 +3,29 @@
  * Handles creating products in Shopify via GraphQL API
  */
 
-import "@shopify/shopify-api/adapters/node";
-import { Session, shopifyApi, LATEST_API_VERSION } from "@shopify/shopify-api";
+import type { Session } from "@shopify/shopify-api";
 import type { GeneratedProduct, ProductVariant } from "./ai.generator";
 
 interface ShopifyConfig {
   shop: string;
   accessToken: string;
   session: Session; // Pass the actual session from shopify.authenticate.admin()
-}
-
-/**
- * Initialize Shopify API client
- * IMPORTANT: Use the same configuration as shopify.server.ts
- */
-function getShopifyClient() {
-  const shopify = shopifyApi({
-    apiKey: process.env.SHOPIFY_API_KEY!,
-    apiSecretKey: process.env.SHOPIFY_API_SECRET!,
-    scopes: process.env.SCOPES?.split(",") || ["write_products", "read_products"],
-    hostName: process.env.SHOPIFY_APP_URL?.replace("https://", "").replace("http://", "") || "",
-    apiVersion: LATEST_API_VERSION,
-    isEmbeddedApp: true,
-  });
-
-  return shopify;
+  admin: any; // Pass the admin object from shopify.authenticate.admin()
 }
 
 /**
  * Create product in Shopify
  * Uses the two-step approach: productCreate + productVariantsBulkCreate
+ * 
+ * IMPORTANT: Uses the admin object from Shopify App Remix, which handles
+ * authentication automatically and ensures the accessToken is valid.
  */
 export async function createShopifyProduct(
   product: GeneratedProduct,
   config: ShopifyConfig,
   imageUrls?: string[]
 ): Promise<{ productId: string; productHandle: string }> {
-  const shopify = getShopifyClient();
-  const session = config.session;
-  const client = new shopify.clients.Graphql({ session });
+  const { admin, session } = config;
 
   try {
     // Step 1: Create product with options (this creates the product + first default variant)
@@ -74,22 +58,15 @@ export async function createShopifyProduct(
     console.log("[Shopify Sync] Session AccessToken (first 20 chars):", session.accessToken?.substring(0, 20) + "...");
     console.log("[Shopify Sync] ==========================================");
     
-    // Try using direct HTTP request to get more detailed error information
-    // This bypasses the Shopify API client wrapper that might be hiding errors
-    const shopDomain = session.shop;
-    const graphqlUrl = `https://${shopDomain}/admin/api/${LATEST_API_VERSION}/graphql.json`;
-    
-    console.log("[Shopify Sync] GraphQL URL:", graphqlUrl);
-    
     let createResponse: any;
     try {
-      // Use Shopify GraphQL client - request method accepts query string and variables object
-      createResponse = await client.request(createMutation, {
+      // Use admin.graphql from Shopify App Remix - this automatically handles authentication
+      createResponse = await admin.graphql(createMutation, {
         variables: {
           input: productInput,
         },
       });
-      console.log("[Shopify Sync] Request succeeded with Shopify client");
+      console.log("[Shopify Sync] Request succeeded with Shopify App Remix admin.graphql");
     } catch (requestError: any) {
       console.error("[Shopify Sync] Request Error (caught in inner try-catch):", requestError);
       console.error("[Shopify Sync] Request Error Type:", typeof requestError);
@@ -107,48 +84,14 @@ export async function createShopifyProduct(
         console.error("[Shopify Sync] Request Error Body (direct):", JSON.stringify(requestError.body, null, 2));
       }
       
-      // Try direct HTTP request to get raw response
-      try {
-        console.log("[Shopify Sync] Attempting direct HTTP request to get raw error...");
-        const directResponse = await fetch(graphqlUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': session.accessToken!,
-          },
-          body: JSON.stringify({
-            query: createMutation,
-            variables: {
-              input: productInput,
-            },
-          }),
-        });
-        
-        const directResponseText = await directResponse.text();
-        console.log("[Shopify Sync] Direct HTTP Response Status:", directResponse.status);
-        console.log("[Shopify Sync] Direct HTTP Response Headers:", Object.fromEntries(directResponse.headers.entries()));
-        console.log("[Shopify Sync] Direct HTTP Response Body (raw):", directResponseText);
-        
-        try {
-          const directResponseJson = JSON.parse(directResponseText);
-          console.log("[Shopify Sync] Direct HTTP Response Body (parsed):", JSON.stringify(directResponseJson, null, 2));
-        } catch (e) {
-          console.error("[Shopify Sync] Failed to parse direct response as JSON:", e);
-        }
-      } catch (directError: any) {
-        console.error("[Shopify Sync] Direct HTTP request also failed:", directError);
-      }
-      
       throw requestError;
     }
 
-    // Shopify GraphQL client may return data directly or wrapped in body
-    const createData = ((createResponse as any).body || createResponse) as any;
+    // admin.graphql returns { data, errors, extensions } directly
+    const createData = createResponse as any;
     console.log("[Shopify Sync] ========== FULL RESPONSE DETAILS ==========");
     console.log("[Shopify Sync] Response Object Keys:", Object.keys(createResponse || {}));
     console.log("[Shopify Sync] Response (full):", JSON.stringify(createResponse, null, 2));
-    console.log("[Shopify Sync] Response Body (if exists):", JSON.stringify(createResponse.body, null, 2));
-    console.log("[Shopify Sync] Create Data (parsed):", JSON.stringify(createData, null, 2));
     console.log("[Shopify Sync] Has data?:", !!createData?.data);
     console.log("[Shopify Sync] Has errors?:", !!createData?.errors);
     if (createData?.data) {
@@ -215,15 +158,15 @@ export async function createShopifyProduct(
     console.log("[Shopify Sync] Step 2: Creating variants...");
     console.log("[Shopify Sync] Variants Input:", JSON.stringify(variantsInput, null, 2));
     
-    const variantsResponse = await client.request(variantsMutation, {
+    const variantsResponse = await admin.graphql(variantsMutation, {
       variables: {
         productId: productId,
         variants: variantsInput,
       },
     });
 
-    // Shopify GraphQL client may return data directly or wrapped in body
-    const variantsData = ((variantsResponse as any).body || variantsResponse) as any;
+    // admin.graphql returns { data, errors, extensions } directly
+    const variantsData = variantsResponse as any;
     console.log("[Shopify Sync] Variants Create Response:", JSON.stringify(variantsData, null, 2));
 
     // Check for errors
