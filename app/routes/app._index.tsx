@@ -65,7 +65,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   let imageUrl: string | null = null;
   
   try {
+    // shopify.authenticate.admin may throw a Response (redirect) if authentication is needed
+    // We need to let it throw, not catch it, so the OAuth flow can continue
     const authResult = await shopify.authenticate.admin(request);
+    
+    // If we get here, authentication succeeded
     session = authResult.session;
     admin = authResult.admin;
     
@@ -166,6 +170,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log("[App Action] ========== ACTION COMPLETED SUCCESSFULLY ==========");
     return redirect(redirectUrl);
   } catch (error) {
+    // If error is a Response (redirect), let it through - this is the OAuth flow
+    // shopify.authenticate.admin throws Response when session is invalid/expired
+    if (error instanceof Response) {
+      console.log("[App Action] Received Response (redirect) from shopify.authenticate.admin");
+      console.log("[App Action] Response Status:", error.status);
+      console.log("[App Action] Response Location:", error.headers.get('location'));
+      console.log("[App Action] This is normal OAuth flow - letting redirect through");
+      throw error; // Let Remix handle the redirect
+    }
+    
     console.error("[App Action] ========== ERROR OCCURRED ==========");
     console.error("[App Action] Error occurred:", error);
     console.error("[App Action] Error type:", error instanceof Error ? error.constructor.name : typeof error);
