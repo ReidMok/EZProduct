@@ -108,6 +108,16 @@ export async function createShopifyProduct(
       
       console.log("[Shopify Sync] Request succeeded with Shopify App Remix admin.graphql");
     } catch (requestError: any) {
+      // IMPORTANT: admin.graphql can throw a Response (302) to /auth/exit-iframe or /auth/session-token
+      // when the embedded auth/session token needs to be refreshed.
+      // In that case, we must NOT swallow it; let Remix handle the redirect.
+      if (requestError instanceof Response) {
+        console.log("[Shopify Sync] admin.graphql threw a Response (redirect). Letting it through.");
+        console.log("[Shopify Sync] Response Status:", requestError.status);
+        console.log("[Shopify Sync] Response Location:", requestError.headers.get("location"));
+        throw requestError;
+      }
+
       console.error("[Shopify Sync] Request Error (caught in inner try-catch):", requestError);
       console.error("[Shopify Sync] Request Error Type:", typeof requestError);
       console.error("[Shopify Sync] Request Error Keys:", Object.keys(requestError || {}));
@@ -228,6 +238,14 @@ export async function createShopifyProduct(
       productHandle: createdProduct.handle,
     };
   } catch (error) {
+    // Same rule: do not swallow redirect Responses.
+    if (error instanceof Response) {
+      console.log("[Shopify Sync] Passing through Response (redirect) from Shopify sync flow.");
+      console.log("[Shopify Sync] Response Status:", error.status);
+      console.log("[Shopify Sync] Response Location:", error.headers.get("location"));
+      throw error;
+    }
+
     // Enhanced error logging for debugging
     console.error("[Shopify Sync] Error Details:", {
       message: error instanceof Error ? error.message : String(error),
