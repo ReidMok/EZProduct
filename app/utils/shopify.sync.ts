@@ -48,41 +48,16 @@ export async function createShopifyProduct(
   console.log(`${pfx} admin.graphql type:`, typeof admin.graphql);
 
   try {
-    // Step 1: Create product (try multiple schema variants to survive API version differences)
-    const baseInput = buildProductCreateInput(product, imageUrls);
-    const productOptionsInput = buildProductCreateInputWithProductOptions(product, imageUrls);
+    // Step 1: Create product
+    // NOTE: Based on real logs (API version 2025-04), Shopify expects:
+    //   productCreate(product: ProductCreateInput!)
+    // and ProductInput does NOT include bodyHtml/options.
+    const productCreateInput = buildProductCreateInputForProductCreate(product, imageUrls);
+    const productCreateInputAlt = buildProductCreateInputForProductCreateAltValues(product, imageUrls);
 
-    const createCandidates: Array<{
-      name: string;
-      mutation: string;
-      variables: any;
-    }> = [
+    const createCandidates: Array<{ name: string; mutation: string; variables: any }> = [
       {
-        name: "productCreate(input: ProductInput!)",
-        mutation: `
-          mutation productCreate($input: ProductInput!) {
-            productCreate(input: $input) {
-              product { id handle title status }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: { input: baseInput },
-      },
-      {
-        name: "productCreate(input: ProductCreateInput!)",
-        mutation: `
-          mutation productCreate($input: ProductCreateInput!) {
-            productCreate(input: $input) {
-              product { id handle title status }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: { input: productOptionsInput },
-      },
-      {
-        name: "productCreate(product: ProductCreateInput!)",
+        name: "productCreate(product: ProductCreateInput!) + productOptions(values: {name})",
         mutation: `
           mutation productCreate($product: ProductCreateInput!) {
             productCreate(product: $product) {
@@ -91,19 +66,32 @@ export async function createShopifyProduct(
             }
           }
         `,
-        variables: { product: productOptionsInput },
+        variables: { product: productCreateInput },
       },
       {
-        name: "productCreate(product: ProductInput!)",
+        name: "productCreate(product: ProductCreateInput!) + productOptions(values: string[])",
         mutation: `
-          mutation productCreate($product: ProductInput!) {
+          mutation productCreate($product: ProductCreateInput!) {
             productCreate(product: $product) {
               product { id handle title status }
               userErrors { field message }
             }
           }
         `,
-        variables: { product: baseInput },
+        variables: { product: productCreateInputAlt },
+      },
+      // Keep a legacy fallback for older schemas
+      {
+        name: "productCreate(input: ProductInput!) (legacy fallback)",
+        mutation: `
+          mutation productCreate($input: ProductInput!) {
+            productCreate(input: $input) {
+              product { id handle title status }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: { input: buildLegacyProductInput(product) },
       },
     ];
 
@@ -162,6 +150,22 @@ export async function createShopifyProduct(
         `,
         variables: {
           productId,
+          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
+        },
+      },
+      {
+        name: "productVariantsBulkCreate(+strategy REMOVE_STANDALONE_VARIANT)",
+        mutation: `
+          mutation productVariantsBulkCreate($productId: ID!, $strategy: ProductVariantsBulkCreateStrategy!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkCreate(productId: $productId, strategy: $strategy, variants: $variants) {
+              productVariants { id title price sku }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: {
+          productId,
+          strategy: "REMOVE_STANDALONE_VARIANT",
           variants: buildVariantsBulkInput(product.variants, "optionName_name"),
         },
       },
@@ -283,59 +287,22 @@ export async function createShopifyProduct(
   }
 }
 
-/**
- * Build ProductInput for productCreate mutation
- * This creates the product and defines options, but only creates the first default variant
- * Note: Using minimal fields first to isolate issues
- */
-function buildProductCreateInput(product: GeneratedProduct, imageUrls?: string[]) {
-  // Start with absolute minimum required fields
-  const input: any = {
-    title: product.title,
-  };
-
-  // Add description (try bodyHtml first, which is the standard field)
-  if (product.descriptionHtml && product.descriptionHtml.trim()) {
-    input.bodyHtml = product.descriptionHtml.trim();
-  }
-  
-  // Add vendor and productType (optional but recommended)
-  input.vendor = "EZProduct";
-  input.productType = "AI Generated";
-  
-  // Add tags as comma-separated string
-  if (product.tags && product.tags.length > 0) {
-    const tagsString = Array.isArray(product.tags) 
-      ? product.tags.filter(t => t && t.trim()).join(", ")
-      : String(product.tags);
-    if (tagsString) {
-      input.tags = tagsString;
-    }
-  }
-
-  // Define product options - this tells Shopify the product has a "Size" option
-  // We'll create variants separately using productVariantsBulkCreate
-  input.options = ["Size"];
-
-  // Temporarily skip images and SEO to isolate the issue
-  // We'll add them back once basic product creation works
-
-  return input;
+function uniqueSizes(product: GeneratedProduct): string[] {
+  return Array.from(new Set((product.variants || []).map((v) => v.size).filter(Boolean)));
 }
 
 /**
- * Alternative input format used by newer schemas (ProductCreateInput) where options are objects with values.
- * This is only used as a fallback candidate to survive API-version/schema differences.
+ * Preferred schema for API 2025-04: ProductCreateInput + descriptionHtml + productOptions
  */
-function buildProductCreateInputWithProductOptions(product: GeneratedProduct, imageUrls?: string[]) {
-  const sizeValues = Array.from(new Set((product.variants || []).map((v) => v.size).filter(Boolean)));
+function buildProductCreateInputForProductCreate(product: GeneratedProduct, imageUrls?: string[]) {
+  const sizeValues = uniqueSizes(product);
   const input: any = {
     title: product.title,
     vendor: "EZProduct",
     productType: "AI Generated",
   };
 
-  // description field name differs across versions; include one common key
+  // GraphQL uses descriptionHtml (NOT bodyHtml)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
     input.descriptionHtml = product.descriptionHtml.trim();
   }
@@ -355,6 +322,31 @@ function buildProductCreateInputWithProductOptions(product: GeneratedProduct, im
 
   // keep images disabled by default; add back after base create works
   void imageUrls;
+  return input;
+}
+
+function buildProductCreateInputForProductCreateAltValues(product: GeneratedProduct, imageUrls?: string[]) {
+  const sizeValues = uniqueSizes(product);
+  const input: any = buildProductCreateInputForProductCreate(product, imageUrls);
+  if (sizeValues.length > 0) {
+    input.productOptions = [
+      {
+        name: "Size",
+        values: sizeValues,
+      },
+    ];
+  }
+  return input;
+}
+
+/**
+ * Legacy ProductInput fallback (for older schemas only)
+ */
+function buildLegacyProductInput(product: GeneratedProduct) {
+  const input: any = { title: product.title };
+  if (product.descriptionHtml && product.descriptionHtml.trim()) {
+    input.descriptionHtml = product.descriptionHtml.trim();
+  }
   return input;
 }
 
@@ -409,16 +401,8 @@ async function runGraphqlWithCandidates(
   for (const c of candidates) {
     console.log(`${pfx} Trying candidate: ${c.name}`);
     try {
-      const res = await admin.graphql(c.mutation, { variables: c.variables });
-
-      // Some environments might return a Response instead of a data object (auth redirect)
-      if (res && typeof res === "object" && "status" in res) {
-        const r = res as Response;
-        console.error(`${pfx} Candidate returned Response object. status=${r.status}`);
-        if ([301, 302, 303, 307, 308].includes(r.status)) throw r;
-      }
-
-      const data = res as any;
+      const raw = await admin.graphql(c.mutation, { variables: c.variables });
+      const data = await normalizeAdminGraphqlResult(raw, pfx);
       if (data?.errors?.length) {
         const msg = data.errors.map((e: any) => e?.message || String(e)).join("; ");
         console.error(`${pfx} Candidate GraphQL errors:`, JSON.stringify(data.errors, null, 2));
@@ -470,6 +454,44 @@ async function runGraphqlWithCandidates(
   }
 
   throw lastError || new Error("All GraphQL candidates failed");
+}
+
+async function normalizeAdminGraphqlResult(raw: any, pfx: string) {
+  // shopify-app-remix admin.graphql can return either:
+  // - a parsed object: { data, errors, extensions }
+  // - a Fetch Response-like object (status, headers, json())
+  if (!raw) return raw;
+
+  // Response-like: has status + headers + json()
+  const isResponseLike =
+    typeof raw === "object" &&
+    typeof raw.status === "number" &&
+    raw.headers &&
+    typeof raw.json === "function";
+
+  if (!isResponseLike) return raw;
+
+  const r = raw as Response;
+  const location = r.headers.get("location") || r.headers.get("Location");
+  console.log(`${pfx} admin.graphql returned Response. status=${r.status} location=${location || "n/a"}`);
+
+  // Redirects must be handled by Remix/browser (token refresh / exit-iframe)
+  if (location && [301, 302, 303, 307, 308].includes(r.status)) {
+    throw r;
+  }
+
+  // Parse JSON body (GraphQL result)
+  try {
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      console.warn(`${pfx} admin.graphql Response content-type is not JSON: ${ct}`);
+    }
+    const parsed = await r.json();
+    return parsed;
+  } catch (err) {
+    console.error(`${pfx} Failed to parse admin.graphql Response as JSON`, err);
+    throw err;
+  }
 }
 /**
  * Get next available SKU number
