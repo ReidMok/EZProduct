@@ -26,6 +26,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   console.log(`[App Loader] ${request.method} ${url.pathname}${url.search}`);
   console.log(`[App Loader] Full URL: ${request.url}`);
+  console.log(`[App Loader] Request Method: ${request.method}`);
+  console.log(`[App Loader] Content-Type: ${request.headers.get("content-type")}`);
   console.log(`[App Loader] Headers:`, Object.fromEntries(request.headers.entries()));
 
   // Vercel bots (e.g. vercel-favicon) may hit /app without Shopify embedded params.
@@ -81,6 +83,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log("[App Action] debugId:", debugId);
   console.log("[App Action] Request URL:", request.url);
   console.log("[App Action] Request Method:", request.method);
+  console.log("[App Action] Content-Type:", request.headers.get("content-type"));
+  console.log("[App Action] All Headers:", Object.fromEntries(request.headers.entries()));
+  
+  // Log request body if it exists
+  try {
+    const clonedRequest = request.clone();
+    const text = await clonedRequest.text();
+    console.log("[App Action] Request body (first 500 chars):", text.substring(0, 500));
+  } catch (e) {
+    console.log("[App Action] Could not read request body:", e);
+  }
   
   // Store variables in outer scope so catch block can access them
   let session: any = null;
