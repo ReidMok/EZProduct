@@ -27,6 +27,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   console.log(`[App Loader] ${request.method} ${url.pathname}${url.search}`);
   console.log(`[App Loader] Full URL: ${request.url}`);
   console.log(`[App Loader] Headers:`, Object.fromEntries(request.headers.entries()));
+
+  // Vercel bots (e.g. vercel-favicon) may hit /app without Shopify embedded params.
+  // Shopify auth will respond with 410 for these, polluting logs. Short-circuit them.
+  const hasEmbeddedParams =
+    url.searchParams.has("embedded") ||
+    url.searchParams.has("shop") ||
+    url.searchParams.has("host") ||
+    url.searchParams.has("hmac");
+  if (!hasEmbeddedParams) {
+    console.log("[App Loader] Missing Shopify embedded params; returning 204 to avoid auth/410 noise.");
+    return new Response(null, { status: 204 });
+  }
   
   // shopify.authenticate.admin may throw a Response (redirect) if authentication is needed
   // We need to let it throw, not catch it
@@ -50,6 +62,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           error.headers.get("Location") || "n/a"
         }`
       );
+      const location = error.headers.get("location") || error.headers.get("Location");
+      if (location && [301, 302, 303, 307, 308].includes(error.status)) {
+        console.log(`[App Loader] Converting auth redirect Response into Remix redirect(${location})`);
+        return redirect(location);
+      }
       return error;
     }
     // Log other errors for debugging
@@ -182,6 +199,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log("[App Action] Returning auth Response from shopify.authenticate.admin");
       console.log("[App Action] Response Status:", error.status);
       console.log("[App Action] Response Location:", error.headers.get("location"));
+      const location = error.headers.get("location") || error.headers.get("Location");
+      if (location && [301, 302, 303, 307, 308].includes(error.status)) {
+        console.log(`[App Action] Converting auth redirect Response into Remix redirect(${location})`);
+        return redirect(location);
+      }
       return error;
     }
     
@@ -299,7 +321,9 @@ export default function Index() {
         )}
 
         <LegacyCard sectioned title="Generate New Product">
-          <Form method="post">
+          {/* Force a document POST so Shopify's exit-iframe HTML/redirect can execute properly.
+              Remix fetch-navigation can treat that HTML as data and show a blank "200" view. */}
+          <Form method="post" reloadDocument>
             <BlockStack gap="loose">
               <TextField
                 label="Product Keywords"
