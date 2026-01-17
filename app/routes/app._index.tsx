@@ -76,7 +76,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  const debugId = Math.random().toString(36).slice(2, 10);
   console.log("[App Action] ========== ACTION STARTED ==========");
+  console.log("[App Action] debugId:", debugId);
   console.log("[App Action] Request URL:", request.url);
   console.log("[App Action] Request Method:", request.method);
   
@@ -147,6 +149,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       accessToken: session.accessToken!,
       session: session, // Pass the actual Session instance
       admin: admin, // Pass the admin object from Shopify App Remix
+      debugId,
     });
     console.log("[App Action] Shopify sync completed. Product ID:", shopifyResult.productId);
     console.log("[App Action] Product Handle:", shopifyResult.productHandle);
@@ -208,6 +211,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     
     console.error("[App Action] ========== ERROR OCCURRED ==========");
+    console.error("[App Action] debugId:", debugId);
     console.error("[App Action] Error occurred:", error);
     console.error("[App Action] Error type:", error instanceof Error ? error.constructor.name : typeof error);
     console.error("[App Action] Error message:", error instanceof Error ? error.message : String(error));
@@ -217,11 +221,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     let errorMessage = "Failed to generate product";
     if (error instanceof Error) {
       errorMessage = error.message;
-      // Truncate very long error messages
-      if (errorMessage.length > 200) {
-        errorMessage = errorMessage.substring(0, 200) + "...";
-      }
     }
+    const errorMessageForUrl =
+      errorMessage.length > 180 ? errorMessage.substring(0, 180) + "..." : errorMessage;
+    const errorMessageForDb =
+      errorMessage.length > 4000 ? errorMessage.substring(0, 4000) + "..." : errorMessage;
 
     // Try to save failed attempt to database (only if we have session and keywords)
     // Note: session and keywords are already available in outer scope
@@ -250,7 +254,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             tags: "", // Required field - empty string
             variantsJson: "[]", // Required field - empty array
             status: "failed",
-            errorMessage: errorMessage,
+            errorMessage: `[debugId=${debugId}] ${errorMessageForDb}`,
           },
         });
         console.log("[App Action] Failed attempt saved to database.");
@@ -261,7 +265,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Always return a redirect, even if error logging failed
-    const redirectUrl = `/app?result=error&message=${encodeURIComponent(errorMessage)}`;
+    const redirectUrl = `/app?result=error&message=${encodeURIComponent(
+      `失败（debugId=${debugId}）：${errorMessageForUrl}`
+    )}`;
     console.log("[App Action] Redirecting with error to:", redirectUrl);
     console.log("[App Action] ========== ACTION COMPLETED WITH ERROR ==========");
     return redirect(redirectUrl);

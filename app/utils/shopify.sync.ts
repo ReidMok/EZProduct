@@ -11,6 +11,7 @@ interface ShopifyConfig {
   accessToken: string;
   session: Session; // Pass the actual session from shopify.authenticate.admin()
   admin: any; // Pass the admin object from shopify.authenticate.admin()
+  debugId?: string;
 }
 
 /**
@@ -25,7 +26,8 @@ export async function createShopifyProduct(
   config: ShopifyConfig,
   imageUrls?: string[]
 ): Promise<{ productId: string; productHandle: string }> {
-  const { admin, session } = config;
+  const { admin, session, debugId } = config;
+  const pfx = debugId ? `[Shopify Sync][debugId=${debugId}]` : "[Shopify Sync]";
 
   // Validate admin object
   if (!admin) {
@@ -41,197 +43,140 @@ export async function createShopifyProduct(
     throw new Error("Session accessToken is missing");
   }
 
-  console.log("[Shopify Sync] Admin object type:", typeof admin);
-  console.log("[Shopify Sync] Admin object keys:", Object.keys(admin || {}));
-  console.log("[Shopify Sync] admin.graphql type:", typeof admin.graphql);
+  console.log(`${pfx} Admin object type:`, typeof admin);
+  console.log(`${pfx} Admin object keys:`, Object.keys(admin || {}));
+  console.log(`${pfx} admin.graphql type:`, typeof admin.graphql);
 
   try {
-    // Step 1: Create product with options (this creates the product + first default variant)
-    // Start with minimal input to isolate the issue
-    const productInput = buildProductCreateInput(product, imageUrls);
-    
-    const createMutation = `
-      mutation productCreate($input: ProductInput!) {
-        productCreate(input: $input) {
-          product {
-            id
-            handle
-            title
-            status
+    // Step 1: Create product (try multiple schema variants to survive API version differences)
+    const baseInput = buildProductCreateInput(product, imageUrls);
+    const productOptionsInput = buildProductCreateInputWithProductOptions(product, imageUrls);
+
+    const createCandidates: Array<{
+      name: string;
+      mutation: string;
+      variables: any;
+    }> = [
+      {
+        name: "productCreate(input: ProductInput!)",
+        mutation: `
+          mutation productCreate($input: ProductInput!) {
+            productCreate(input: $input) {
+              product { id handle title status }
+              userErrors { field message }
+            }
           }
-          userErrors {
-            field
-            message
+        `,
+        variables: { input: baseInput },
+      },
+      {
+        name: "productCreate(input: ProductCreateInput!)",
+        mutation: `
+          mutation productCreate($input: ProductCreateInput!) {
+            productCreate(input: $input) {
+              product { id handle title status }
+              userErrors { field message }
+            }
           }
-        }
-      }
-    `;
+        `,
+        variables: { input: productOptionsInput },
+      },
+      {
+        name: "productCreate(product: ProductCreateInput!)",
+        mutation: `
+          mutation productCreate($product: ProductCreateInput!) {
+            productCreate(product: $product) {
+              product { id handle title status }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: { product: productOptionsInput },
+      },
+      {
+        name: "productCreate(product: ProductInput!)",
+        mutation: `
+          mutation productCreate($product: ProductInput!) {
+            productCreate(product: $product) {
+              product { id handle title status }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: { product: baseInput },
+      },
+    ];
 
-    console.log("[Shopify Sync] Step 1: Creating product with options...");
-    console.log("[Shopify Sync] ========== FULL REQUEST DETAILS ==========");
-    console.log("[Shopify Sync] Mutation String:", createMutation);
-    console.log("[Shopify Sync] Variables:", JSON.stringify({ input: productInput }, null, 2));
-    console.log("[Shopify Sync] Product Input (detailed):", JSON.stringify(productInput, null, 2));
-    console.log("[Shopify Sync] Session Shop:", session.shop);
-    console.log("[Shopify Sync] Session AccessToken (first 20 chars):", session.accessToken?.substring(0, 20) + "...");
-    console.log("[Shopify Sync] ==========================================");
-    
-    let createResponse: any;
-    try {
-      // Use admin.graphql from Shopify App Remix - this automatically handles authentication
-      createResponse = await admin.graphql(createMutation, {
-        variables: {
-          input: productInput,
-        },
-      });
-      
-      // Check if the response is a Response object (redirect) instead of data
-      if (createResponse && typeof createResponse === 'object' && 'status' in createResponse) {
-        const response = createResponse as Response;
-        console.error("[Shopify Sync] admin.graphql returned a Response object instead of data!");
-        console.error("[Shopify Sync] Response Status:", response.status);
-        console.error("[Shopify Sync] Response Headers:", Object.fromEntries(response.headers.entries()));
-        console.error("[Shopify Sync] Response Type:", response.type);
-        
-        if (response.status === 302 || response.status === 401) {
-          const location = response.headers.get('location');
-          throw new Error(
-            `Shopify authentication failed. ` +
-            `admin.graphql returned ${response.status} redirect to: ${location || 'unknown'}. ` +
-            `This usually means the session is invalid or expired. ` +
-            `Please try refreshing the app in Shopify admin.`
-          );
-        }
-        
-        throw new Error(`Shopify API returned unexpected response status: ${response.status}`);
-      }
-      
-      console.log("[Shopify Sync] Request succeeded with Shopify App Remix admin.graphql");
-    } catch (requestError: any) {
-      // IMPORTANT: admin.graphql can throw a Response (302) to /auth/exit-iframe or /auth/session-token
-      // when the embedded auth/session token needs to be refreshed.
-      // In that case, we must NOT swallow it; let Remix handle the redirect.
-      if (requestError instanceof Response) {
-        console.log("[Shopify Sync] admin.graphql threw a Response (redirect). Letting it through.");
-        console.log("[Shopify Sync] Response Status:", requestError.status);
-        console.log("[Shopify Sync] Response Location:", requestError.headers.get("location"));
-        throw requestError;
-      }
+    console.log(`${pfx} Step 1: Creating product... candidates=${createCandidates.length}`);
+    console.log(`${pfx} Session Shop:`, session.shop);
 
-      console.error("[Shopify Sync] Request Error (caught in inner try-catch):", requestError);
-      console.error("[Shopify Sync] Request Error Type:", typeof requestError);
-      console.error("[Shopify Sync] Request Error Keys:", Object.keys(requestError || {}));
-      console.error("[Shopify Sync] Request Error Message:", requestError?.message);
-      console.error("[Shopify Sync] Request Error Stack:", requestError?.stack);
-      
-      if (requestError?.response) {
-        console.error("[Shopify Sync] Request Error Response (full):", JSON.stringify(requestError.response, null, 2));
-        if (requestError.response.body) {
-          console.error("[Shopify Sync] Request Error Response Body:", JSON.stringify(requestError.response.body, null, 2));
-        }
-      }
-      if (requestError?.body) {
-        console.error("[Shopify Sync] Request Error Body (direct):", JSON.stringify(requestError.body, null, 2));
-      }
-      
-      throw requestError;
-    }
-
-    // admin.graphql returns { data, errors, extensions } directly
-    const createData = createResponse as any;
-    console.log("[Shopify Sync] ========== FULL RESPONSE DETAILS ==========");
-    console.log("[Shopify Sync] Response Object Keys:", Object.keys(createResponse || {}));
-    console.log("[Shopify Sync] Response (full):", JSON.stringify(createResponse, null, 2));
-    console.log("[Shopify Sync] Has data?:", !!createData?.data);
-    console.log("[Shopify Sync] Has errors?:", !!createData?.errors);
-    if (createData?.data) {
-      console.log("[Shopify Sync] Data Keys:", Object.keys(createData.data));
-      if (createData.data.productCreate) {
-        console.log("[Shopify Sync] productCreate Keys:", Object.keys(createData.data.productCreate));
-        console.log("[Shopify Sync] productCreate.userErrors:", createData.data.productCreate.userErrors);
-        console.log("[Shopify Sync] productCreate.product:", createData.data.productCreate.product);
-      }
-    }
-    if (createData?.errors) {
-      console.log("[Shopify Sync] Errors (full):", JSON.stringify(createData.errors, null, 2));
-    }
-    console.log("[Shopify Sync] ============================================");
-
-    // Check for GraphQL errors FIRST
-    if (createData.errors && Array.isArray(createData.errors) && createData.errors.length > 0) {
-      const errorMessages = createData.errors.map((e: any) => {
-        const msg = e.message || String(e);
-        const path = e.path ? ` (path: ${JSON.stringify(e.path)})` : "";
-        const locations = e.locations ? ` (line: ${e.locations[0]?.line}, column: ${e.locations[0]?.column})` : "";
-        return `${msg}${path}${locations}`;
-      }).join("; ");
-      console.error("[Shopify Sync] GraphQL Errors:", JSON.stringify(createData.errors, null, 2));
-      throw new Error(`Shopify GraphQL errors: ${errorMessages}`);
-    }
-
-    // Check for user errors
-    if (createData.data?.productCreate?.userErrors?.length > 0) {
-      const errors = createData.data.productCreate.userErrors;
-      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
-      console.error("[Shopify Sync] User Errors:", JSON.stringify(errors, null, 2));
-      throw new Error(`Shopify API user errors: ${errorMessages}`);
-    }
-
-    if (!createData.data?.productCreate?.product) {
-      console.error("[Shopify Sync] No product returned. Full response:", JSON.stringify(createData, null, 2));
+    const createResult = await runGraphqlWithCandidates(admin, createCandidates, pfx);
+    const createdProduct = createResult?.data?.productCreate?.product;
+    if (!createdProduct?.id) {
+      console.error(`${pfx} No product returned. Full response:`, JSON.stringify(createResult, null, 2));
       throw new Error("Failed to create product: No product returned");
     }
-
-    const createdProduct = createData.data.productCreate.product;
-    const productId = createdProduct.id;
+    const productId = createdProduct.id as string;
 
     // Step 2: Create all variants using productVariantsBulkCreate
-    const variantsInput = buildVariantsBulkInput(product.variants, productId);
-    
-    const variantsMutation = `
-      mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-        productVariantsBulkCreate(productId: $productId, variants: $variants) {
-          productVariants {
-            id
-            title
-            price
-            sku
+    const variantsCandidates: Array<{ name: string; mutation: string; variables: any }> = [
+      {
+        name: "productVariantsBulkCreate(ProductVariantsBulkInput + option/value)",
+        mutation: `
+          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkCreate(productId: $productId, variants: $variants) {
+              productVariants { id title price sku }
+              userErrors { field message }
+            }
           }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
-
-    console.log("[Shopify Sync] Step 2: Creating variants...");
-    console.log("[Shopify Sync] Variants Input:", JSON.stringify(variantsInput, null, 2));
-    
-    const variantsResponse = await admin.graphql(variantsMutation, {
-      variables: {
-        productId: productId,
-        variants: variantsInput,
+        `,
+        variables: {
+          productId,
+          variants: buildVariantsBulkInput(product.variants, "option_value"),
+        },
       },
-    });
+      {
+        name: "productVariantsBulkCreate(ProductVariantsBulkInput + optionName/name)",
+        mutation: `
+          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkCreate(productId: $productId, variants: $variants) {
+              productVariants { id title price sku }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: {
+          productId,
+          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
+        },
+      },
+      {
+        name: "productVariantsBulkCreate(ProductVariantsBulkCreateInput + optionName/name)",
+        mutation: `
+          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkCreateInput!]!) {
+            productVariantsBulkCreate(productId: $productId, variants: $variants) {
+              productVariants { id title price sku }
+              userErrors { field message }
+            }
+          }
+        `,
+        variables: {
+          productId,
+          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
+        },
+      },
+    ];
 
-    // admin.graphql returns { data, errors, extensions } directly
-    const variantsData = variantsResponse as any;
-    console.log("[Shopify Sync] Variants Create Response:", JSON.stringify(variantsData, null, 2));
-
-    // Check for errors
-    if (variantsData.errors && Array.isArray(variantsData.errors) && variantsData.errors.length > 0) {
-      const errorMessages = variantsData.errors.map((e: any) => e.message || String(e)).join("; ");
-      throw new Error(`Shopify GraphQL errors (variants): ${errorMessages}`);
-    }
-
-    if (variantsData.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
+    console.log(`${pfx} Step 2: Creating variants... candidates=${variantsCandidates.length}`);
+    const variantsResult = await runGraphqlWithCandidates(admin, variantsCandidates, pfx);
+    const variantsData = variantsResult as any;
+    if (variantsData?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
       const errors = variantsData.data.productVariantsBulkCreate.userErrors;
       const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
       throw new Error(`Shopify API user errors (variants): ${errorMessages}`);
     }
 
-    console.log("[Shopify Sync] Product and variants created successfully!");
+    console.log(`${pfx} Product and variants created successfully!`);
 
     return {
       productId: productId,
@@ -240,14 +185,14 @@ export async function createShopifyProduct(
   } catch (error) {
     // Same rule: do not swallow redirect Responses.
     if (error instanceof Response) {
-      console.log("[Shopify Sync] Passing through Response (redirect) from Shopify sync flow.");
-      console.log("[Shopify Sync] Response Status:", error.status);
-      console.log("[Shopify Sync] Response Location:", error.headers.get("location"));
+      console.log(`${pfx} Passing through Response (redirect) from Shopify sync flow.`);
+      console.log(`${pfx} Response Status:`, error.status);
+      console.log(`${pfx} Response Location:`, error.headers.get("location"));
       throw error;
     }
 
     // Enhanced error logging for debugging
-    console.error("[Shopify Sync] Error Details:", {
+    console.error(`${pfx} Error Details:`, {
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
       error: error,
@@ -259,11 +204,11 @@ export async function createShopifyProduct(
     let detailedError = "";
     
     // Log the full error structure for debugging
-    console.error("[Shopify Sync] Full Error Object:", JSON.stringify(errAny, null, 2));
+    console.error(`${pfx} Full Error Object:`, JSON.stringify(errAny, null, 2));
     
     if (errAny?.response?.body) {
       const responseBody = errAny.response.body;
-      console.error("[Shopify Sync] Response Body (full):", JSON.stringify(responseBody, null, 2));
+      console.error(`${pfx} Response Body (full):`, JSON.stringify(responseBody, null, 2));
       
       // Try to extract GraphQL errors from response body
       if (responseBody.errors) {
@@ -293,7 +238,7 @@ export async function createShopifyProduct(
             const nestedBody = typeof nestedResponse.body === 'string' 
               ? JSON.parse(nestedResponse.body) 
               : nestedResponse.body;
-            console.error("[Shopify Sync] Nested Response Body:", JSON.stringify(nestedBody, null, 2));
+                    console.error(`${pfx} Nested Response Body:`, JSON.stringify(nestedBody, null, 2));
             
             if (nestedBody.errors) {
               if (Array.isArray(nestedBody.errors)) {
@@ -310,7 +255,7 @@ export async function createShopifyProduct(
     // Try to extract from error object directly
     if (!detailedError && errAny?.body) {
       const body = errAny.body;
-      console.error("[Shopify Sync] Error Body (direct):", JSON.stringify(body, null, 2));
+      console.error(`${pfx} Error Body (direct):`, JSON.stringify(body, null, 2));
       if (body.errors) {
         if (Array.isArray(body.errors)) {
           detailedError = body.errors.map((e: any) => e.message || String(e)).join("; ");
@@ -325,9 +270,7 @@ export async function createShopifyProduct(
     const statusCode = errAny?.networkStatusCode || errAny?.response?.code || errAny?.response?.statusCode;
     
     if (detailedError) {
-      throw new Error(
-        `Failed to sync product to Shopify (${statusCode || "Unknown"}): ${detailedError}`
-      );
+      throw new Error(`Failed to sync product to Shopify (${statusCode || "Unknown"}): ${detailedError}`);
     } else if (statusCode) {
       throw new Error(
         `Failed to sync product to Shopify: Received an error response (${statusCode}) from Shopify: ${baseMessage}`
@@ -381,20 +324,60 @@ function buildProductCreateInput(product: GeneratedProduct, imageUrls?: string[]
 }
 
 /**
+ * Alternative input format used by newer schemas (ProductCreateInput) where options are objects with values.
+ * This is only used as a fallback candidate to survive API-version/schema differences.
+ */
+function buildProductCreateInputWithProductOptions(product: GeneratedProduct, imageUrls?: string[]) {
+  const sizeValues = Array.from(new Set((product.variants || []).map((v) => v.size).filter(Boolean)));
+  const input: any = {
+    title: product.title,
+    vendor: "EZProduct",
+    productType: "AI Generated",
+  };
+
+  // description field name differs across versions; include one common key
+  if (product.descriptionHtml && product.descriptionHtml.trim()) {
+    input.descriptionHtml = product.descriptionHtml.trim();
+  }
+
+  if (product.tags && product.tags.length > 0) {
+    input.tags = Array.isArray(product.tags) ? product.tags.filter((t) => t && t.trim()) : product.tags;
+  }
+
+  if (sizeValues.length > 0) {
+    input.productOptions = [
+      {
+        name: "Size",
+        values: sizeValues.map((name) => ({ name })),
+      },
+    ];
+  }
+
+  // keep images disabled by default; add back after base create works
+  void imageUrls;
+  return input;
+}
+
+/**
  * Build ProductVariantsBulkInput for productVariantsBulkCreate mutation
  * This creates all variants with their prices, SKUs, etc.
  */
-function buildVariantsBulkInput(variants: ProductVariant[], productId: string) {
+function buildVariantsBulkInput(
+  variants: ProductVariant[],
+  optionStyle: "option_value" | "optionName_name"
+) {
   return variants.map((variant: ProductVariant) => {
     const variantInput: any = {
-      // Use optionValues to specify which option values this variant uses
-      // Format: [{ option: "Size", value: "6inch" }]
-      optionValues: [
-        {
-          option: "Size",
-          value: variant.size,
-        },
-      ],
+      optionValues:
+        optionStyle === "optionName_name"
+          ? [
+              // Newer input object shape
+              { optionName: "Size", name: variant.size },
+            ]
+          : [
+              // Older/community shape
+              { option: "Size", value: variant.size },
+            ],
       price: variant.price.toString(),
     };
     
@@ -416,6 +399,78 @@ function buildVariantsBulkInput(variants: ProductVariant[], productId: string) {
   });
 }
 
+async function runGraphqlWithCandidates(
+  admin: any,
+  candidates: Array<{ name: string; mutation: string; variables: any }>,
+  pfx: string
+) {
+  let lastError: any;
+
+  for (const c of candidates) {
+    console.log(`${pfx} Trying candidate: ${c.name}`);
+    try {
+      const res = await admin.graphql(c.mutation, { variables: c.variables });
+
+      // Some environments might return a Response instead of a data object (auth redirect)
+      if (res && typeof res === "object" && "status" in res) {
+        const r = res as Response;
+        console.error(`${pfx} Candidate returned Response object. status=${r.status}`);
+        if ([301, 302, 303, 307, 308].includes(r.status)) throw r;
+      }
+
+      const data = res as any;
+      if (data?.errors?.length) {
+        const msg = data.errors.map((e: any) => e?.message || String(e)).join("; ");
+        console.error(`${pfx} Candidate GraphQL errors:`, JSON.stringify(data.errors, null, 2));
+        lastError = new Error(msg);
+        continue;
+      }
+
+      if (data?.data?.productCreate?.userErrors?.length) {
+        const errors = data.data.productCreate.userErrors;
+        const msg = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
+        lastError = new Error(msg);
+        console.error(`${pfx} Candidate userErrors:`, JSON.stringify(errors, null, 2));
+        continue;
+      }
+
+      // For variants mutation, userErrors are checked by caller; treat no data as failure
+      if (!data?.data) {
+        lastError = new Error("No data returned");
+        continue;
+      }
+
+      console.log(`${pfx} Candidate success: ${c.name}`);
+      return data;
+    } catch (e: any) {
+      if (e instanceof Response) {
+        console.log(`${pfx} Candidate threw Response (redirect).`);
+        throw e;
+      }
+      lastError = e;
+      const m = e?.message || String(e);
+      console.error(`${pfx} Candidate failed: ${c.name} error=${m}`);
+
+      // If this is a schema mismatch (unknown argument/type), try next candidate
+      if (
+        typeof m === "string" &&
+        (m.includes("Unknown argument") ||
+          m.includes("Unknown type") ||
+          m.includes("Field") ||
+          m.includes("has no argument") ||
+          m.includes("not defined") ||
+          m.includes("Expected type"))
+      ) {
+        continue;
+      }
+
+      // Otherwise, still allow next candidate, but keep lastError for final throw.
+      continue;
+    }
+  }
+
+  throw lastError || new Error("All GraphQL candidates failed");
+}
 /**
  * Get next available SKU number
  * This would typically query your database for the highest SKU number
