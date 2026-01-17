@@ -139,21 +139,6 @@ export async function createShopifyProduct(
         },
       },
       {
-        name: "productVariantsBulkCreate(ProductVariantsBulkCreateInput + optionName/name)",
-        mutation: `
-          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkCreateInput!]!) {
-            productVariantsBulkCreate(productId: $productId, variants: $variants) {
-              productVariants { id title price sku }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: {
-          productId,
-          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
-        },
-      },
-      {
         name: "productVariantsBulkCreate(+strategy REMOVE_STANDALONE_VARIANT)",
         mutation: `
           mutation productVariantsBulkCreate($productId: ID!, $strategy: ProductVariantsBulkCreateStrategy!, $variants: [ProductVariantsBulkInput!]!) {
@@ -373,20 +358,12 @@ function buildVariantsBulkInput(
       price: variant.price.toString(),
     };
     
-    // Add optional fields
-    if (variant.sku && variant.sku.trim()) {
-      variantInput.sku = variant.sku;
-    }
-    
+    // Optional fields: keep only what the schema accepts.
+    // In API 2025-04, ProductVariantsBulkInput does NOT include sku/weight/weightUnit.
+    // We'll set SKU/weight in a follow-up mutation once bulk creation succeeds.
     if (variant.compareAtPrice > 0) {
       variantInput.compareAtPrice = variant.compareAtPrice.toString();
     }
-    
-    if (variant.weight > 0) {
-      variantInput.weight = variant.weight;
-      variantInput.weightUnit = "GRAMS";
-    }
-    
     return variantInput;
   });
 }
