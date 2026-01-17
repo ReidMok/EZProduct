@@ -11,8 +11,6 @@ import {
   TextField,
   Button,
   Banner,
-  Spinner,
-  InlineStack,
   Text,
   BlockStack,
 } from "@shopify/polaris";
@@ -100,6 +98,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   let admin: any = null;
   let keywords: string = "";
   let imageUrl: string | null = null;
+
+  const buildEmbeddedRedirectUrl = (updates: Record<string, string | null | undefined>) => {
+    const url = new URL(request.url);
+    // These can be huge and are not needed after the POST; keeping them makes URLs brittle
+    url.searchParams.delete("id_token");
+
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === undefined || v === "") url.searchParams.delete(k);
+      else url.searchParams.set(k, v);
+    }
+
+    return `${url.pathname}?${url.searchParams.toString()}`;
+  };
   
   try {
     // shopify.authenticate.admin may throw a Response (redirect) if authentication is needed
@@ -122,7 +133,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!keywords || keywords.trim() === "") {
       console.log("[App Action] No keywords provided. Redirecting with error.");
-      return redirect(`/app?result=error&message=${encodeURIComponent("Please enter product keywords")}`);
+      return redirect(
+        buildEmbeddedRedirectUrl({
+          result: "error",
+          message: "Please enter product keywords",
+          productId: null,
+        })
+      );
     }
 
     console.log("[App Action] Starting product generation...");
@@ -151,12 +168,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log("[App Action] Test query response keys:", testResponse ? Object.keys(testResponse) : 'null');
       if (testResponse && typeof testResponse === 'object' && 'status' in testResponse) {
         const response = testResponse as Response;
+        const contentType = response.headers.get("content-type") || "";
         console.error("[App Action] Test query returned Response object (redirect)! Status:", response.status);
         console.error("[App Action] Test query Response headers:", Object.fromEntries(response.headers.entries()));
-        const location = response.headers.get('location');
-        if (location && location.includes('/auth/exit-iframe')) {
-          console.log("[App Action] Embedded session token needs refresh. Returning redirect to /auth/exit-iframe");
-          // Return the Response directly so browser can execute exit-iframe script and refresh token
+        const location = response.headers.get("location") || response.headers.get("Location") || "";
+
+        // IMPORTANT:
+        // Shopify embedded auth can return:
+        // - 302 redirect to /auth/exit-iframe
+        // - 200 text/plain (or text/html) body containing a script to refresh token / break out of iframe
+        // In both cases, return the Response to the browser (Form reloadDocument) so it can execute the script.
+        const isJson = contentType.includes("application/json");
+        const isAuthFlow =
+          (response.status >= 300 && response.status < 400) ||
+          location.includes("/auth/exit-iframe") ||
+          location.includes("/auth/session-token") ||
+          !isJson;
+        if (isAuthFlow) {
+          console.log("[App Action] Embedded auth/session flow detected. Returning Response to browser.");
           return response;
         }
       } else {
@@ -165,9 +194,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } catch (testError: any) {
       // If testError is a Response (redirect), return it immediately
       if (testError instanceof Response) {
-        const location = testError.headers.get('location');
-        if (location && location.includes('/auth/exit-iframe')) {
-          console.log("[App Action] Test query threw Response (redirect) for token refresh. Returning it.");
+        const contentType = testError.headers.get("content-type") || "";
+        const location = testError.headers.get("location") || testError.headers.get("Location") || "";
+        const isJson = contentType.includes("application/json");
+        const isAuthFlow =
+          (testError.status >= 300 && testError.status < 400) ||
+          location.includes("/auth/exit-iframe") ||
+          location.includes("/auth/session-token") ||
+          !isJson;
+        if (isAuthFlow) {
+          console.log("[App Action] Test query threw auth/session Response. Returning it.");
           return testError;
         }
       }
@@ -218,9 +254,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log("[App Action] Database save completed.");
 
     // PRG pattern: redirect back to /app so Shopify iframe won't show raw JSON or a blank "200" page
-    const redirectUrl = `/app?result=success&productId=${encodeURIComponent(shopifyResult.productId)}&message=${encodeURIComponent(
-      "Product generated and synced successfully!"
-    )}`;
+    const redirectUrl = buildEmbeddedRedirectUrl({
+      result: "success",
+      productId: shopifyResult.productId,
+      message: "Product generated and synced successfully!",
+    });
     console.log("[App Action] Redirecting to:", redirectUrl);
     console.log("[App Action] ========== ACTION COMPLETED SUCCESSFULLY ==========");
     return redirect(redirectUrl);
@@ -306,9 +344,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Always return a redirect, even if error logging failed
-    const redirectUrl = `/app?result=error&message=${encodeURIComponent(
-      `失败（debugId=${debugId}）：${errorMessageForUrl}`
-    )}`;
+    const redirectUrl = buildEmbeddedRedirectUrl({
+      result: "error",
+      message: `失败（debugId=${debugId}）：${errorMessageForUrl}`,
+      productId: null,
+    });
     console.log("[App Action] Redirecting with error to:", redirectUrl);
     console.log("[App Action] ========== ACTION COMPLETED WITH ERROR ==========");
     return redirect(redirectUrl);
@@ -321,6 +361,7 @@ export default function Index() {
   const navigation = useNavigation();
 
   const isSubmitting = navigation.state === "submitting";
+  const [documentSubmitting, setDocumentSubmitting] = useState(false);
   const [keywords, setKeywords] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
@@ -339,12 +380,16 @@ export default function Index() {
       const timer = setTimeout(() => {
         // Only clear if not currently submitting
         if (navigation.state === "idle") {
-          setSearchParams({}, { replace: true });
+          const next = new URLSearchParams(searchParams);
+          next.delete("result");
+          next.delete("message");
+          next.delete("productId");
+          setSearchParams(next, { replace: true });
         }
       }, 10000); // Clear after 10 seconds
       return () => clearTimeout(timer);
     }
-  }, [result, message, navigation.state, setSearchParams]);
+  }, [result, message, navigation.state, setSearchParams, searchParams]);
 
   return (
     <Page
@@ -353,14 +398,14 @@ export default function Index() {
     >
       <BlockStack gap="500">
         {result === "error" && message && (
-          <Banner status="critical" title="Error">
+          <Banner tone="critical" title="Error">
             <p>{message}</p>
           </Banner>
         )}
 
         {result === "success" && (
           <Banner
-            status="success"
+            tone="success"
             title="Success!"
             action={
               productId
@@ -383,6 +428,7 @@ export default function Index() {
             method="post"
             reloadDocument
             onSubmit={(e) => {
+              setDocumentSubmitting(true);
               console.log("[App UI] Form onSubmit triggered!");
               console.log("[App UI] Keywords:", keywords);
               console.log("[App UI] ImageUrl:", imageUrl);
@@ -390,7 +436,7 @@ export default function Index() {
               // Don't prevent default - let Remix handle it
             }}
           >
-            <BlockStack gap="loose">
+            <BlockStack gap="400">
               <TextField
                 label="Product Keywords"
                 name="keywords"
@@ -403,7 +449,7 @@ export default function Index() {
                 placeholder="e.g., Ceramic Coffee Mug, Yoga Mat, Pet Collar"
                 helpText="Enter keywords describing your product. AI will generate title, description, variants, and SEO metadata."
                 autoComplete="off"
-                disabled={isSubmitting}
+                disabled={isSubmitting || documentSubmitting}
               />
 
               <TextField
@@ -418,14 +464,14 @@ export default function Index() {
                 placeholder="https://example.com/product-image.jpg"
                 helpText="Optional: Provide an image URL for AI to analyze and incorporate into the description."
                 autoComplete="off"
-                disabled={isSubmitting}
+                disabled={isSubmitting || documentSubmitting}
               />
 
               <Button
                 submit
                 variant="primary"
-                loading={isSubmitting}
-                disabled={isSubmitting}
+                loading={isSubmitting || documentSubmitting}
+                disabled={isSubmitting || documentSubmitting}
                 onClick={() => {
                   console.log("[App UI] Button clicked!");
                   console.log("[App UI] Current keywords:", keywords);
@@ -433,14 +479,7 @@ export default function Index() {
                   console.log("[App UI] isSubmitting:", isSubmitting);
                 }}
               >
-                {isSubmitting ? (
-                  <InlineStack align="center" gap="tight">
-                    <Spinner size="small" />
-                    <Text as="span">Generating...</Text>
-                  </InlineStack>
-                ) : (
-                  "Generate & Sync Product"
-                )}
+                {isSubmitting || documentSubmitting ? "Generating..." : "Generate & Sync Product"}
               </Button>
             </BlockStack>
           </Form>
