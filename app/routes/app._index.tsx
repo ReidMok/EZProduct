@@ -311,6 +311,15 @@ export default function Index() {
   const [keywords, setKeywords] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
+  // Debug: Log form submission state
+  useEffect(() => {
+    console.log("[App UI] Navigation state changed:", navigation.state);
+    console.log("[App UI] isSubmitting:", isSubmitting);
+    if (navigation.state === "submitting") {
+      console.log("[App UI] Form is submitting...");
+    }
+  }, [navigation.state, isSubmitting]);
+
   // Clear URL search params after displaying message (optional, for cleaner URLs)
   useEffect(() => {
     if (result || message) {
@@ -357,14 +366,27 @@ export default function Index() {
         <LegacyCard sectioned title="Generate New Product">
           {/* Force a document POST so Shopify's exit-iframe HTML/redirect can execute properly.
               Remix fetch-navigation can treat that HTML as data and show a blank "200" view. */}
-          <Form method="post" reloadDocument>
+          <Form
+            method="post"
+            reloadDocument
+            onSubmit={(e) => {
+              console.log("[App UI] Form onSubmit triggered!");
+              console.log("[App UI] Keywords:", keywords);
+              console.log("[App UI] ImageUrl:", imageUrl);
+              console.log("[App UI] Form data:", new FormData(e.currentTarget));
+              // Don't prevent default - let Remix handle it
+            }}
+          >
             <BlockStack gap="loose">
               <TextField
                 label="Product Keywords"
                 name="keywords"
                 type="text"
                 value={keywords}
-                onChange={setKeywords}
+                onChange={(value) => {
+                  console.log("[App UI] Keywords changed:", value);
+                  setKeywords(value);
+                }}
                 placeholder="e.g., Ceramic Coffee Mug, Yoga Mat, Pet Collar"
                 helpText="Enter keywords describing your product. AI will generate title, description, variants, and SEO metadata."
                 autoComplete="off"
@@ -376,7 +398,10 @@ export default function Index() {
                 name="imageUrl"
                 type="url"
                 value={imageUrl}
-                onChange={setImageUrl}
+                onChange={(value) => {
+                  console.log("[App UI] ImageUrl changed:", value);
+                  setImageUrl(value);
+                }}
                 placeholder="https://example.com/product-image.jpg"
                 helpText="Optional: Provide an image URL for AI to analyze and incorporate into the description."
                 autoComplete="off"
@@ -388,6 +413,12 @@ export default function Index() {
                 variant="primary"
                 loading={isSubmitting}
                 disabled={isSubmitting}
+                onClick={() => {
+                  console.log("[App UI] Button clicked!");
+                  console.log("[App UI] Current keywords:", keywords);
+                  console.log("[App UI] Current imageUrl:", imageUrl);
+                  console.log("[App UI] isSubmitting:", isSubmitting);
+                }}
               >
                 {isSubmitting ? (
                   <InlineStack align="center" gap="tight">
