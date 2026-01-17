@@ -12,7 +12,7 @@ import {
 } from "@remix-run/react";
 import { json, type LinksFunction, type LoaderFunctionArgs } from "@remix-run/node";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import { AppProvider as ShopifyAppProvider, useNonce } from "@shopify/shopify-app-remix/react";
+import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-remix/react";
 // IMPORTANT:
 // Avoid importing JSON directly in SSR builds (can trigger JSON module assertion issues on Vercel).
 // Use Vite `?raw` and JSON.parse so it is bundled as plain JS.
@@ -32,7 +32,6 @@ export const loader = async (_args: LoaderFunctionArgs) => {
 export default function App() {
   const enTranslations = JSON.parse(enTranslationsRaw) as Record<string, any>;
   const { apiKey } = useLoaderData<typeof loader>();
-  const nonce = useNonce();
   return (
     <html lang="en">
       <head>
@@ -50,7 +49,7 @@ export default function App() {
           </PolarisAppProvider>
         </ShopifyAppProvider>
         <ScrollRestoration />
-        <Scripts nonce={nonce} />
+        <Scripts />
       </body>
     </html>
   );
