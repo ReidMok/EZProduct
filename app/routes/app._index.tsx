@@ -128,6 +128,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     
     // Test admin.graphql directly to see if it works
+    // IMPORTANT: If this returns a Response (302 redirect), it means embedded session token needs refresh
+    // We should let it through immediately, not continue with product creation
     console.log("[App Action] Testing admin.graphql with a simple query...");
     try {
       const testQuery = `query { shop { name } }`;
@@ -135,12 +137,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log("[App Action] Test query response type:", typeof testResponse);
       console.log("[App Action] Test query response keys:", testResponse ? Object.keys(testResponse) : 'null');
       if (testResponse && typeof testResponse === 'object' && 'status' in testResponse) {
-        console.error("[App Action] Test query returned Response object (redirect)! Status:", (testResponse as Response).status);
-        console.error("[App Action] Test query Response headers:", Object.fromEntries((testResponse as Response).headers.entries()));
+        const response = testResponse as Response;
+        console.error("[App Action] Test query returned Response object (redirect)! Status:", response.status);
+        console.error("[App Action] Test query Response headers:", Object.fromEntries(response.headers.entries()));
+        const location = response.headers.get('location');
+        if (location && location.includes('/auth/exit-iframe')) {
+          console.log("[App Action] Embedded session token needs refresh. Returning redirect to /auth/exit-iframe");
+          // Return the Response directly so browser can execute exit-iframe script and refresh token
+          return response;
+        }
       } else {
         console.log("[App Action] Test query succeeded! Response:", JSON.stringify(testResponse, null, 2).substring(0, 200));
       }
     } catch (testError: any) {
+      // If testError is a Response (redirect), return it immediately
+      if (testError instanceof Response) {
+        const location = testError.headers.get('location');
+        if (location && location.includes('/auth/exit-iframe')) {
+          console.log("[App Action] Test query threw Response (redirect) for token refresh. Returning it.");
+          return testError;
+        }
+      }
       console.error("[App Action] Test query failed:", testError);
     }
     
@@ -199,10 +216,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // For embedded apps, we must RETURN it so the browser executes the script / follows the redirect.
     // Throwing can make Remix treat it as an ErrorResponse, which is what you're seeing in the console.
     if (error instanceof Response) {
-      console.log("[App Action] Returning auth Response from shopify.authenticate.admin");
+      console.log("[App Action] Received Response (redirect) from Shopify API");
       console.log("[App Action] Response Status:", error.status);
-      console.log("[App Action] Response Location:", error.headers.get("location"));
       const location = error.headers.get("location") || error.headers.get("Location");
+      console.log("[App Action] Response Location:", location);
+      
+      // If it's a redirect to /auth/exit-iframe, return the Response directly
+      // This allows the browser to execute the exit-iframe script and refresh the embedded session token
+      if (location && location.includes('/auth/exit-iframe')) {
+        console.log("[App Action] Embedded session token needs refresh. Returning Response directly for browser to handle.");
+        // Return the Response as-is so browser can execute exit-iframe script
+        // With reloadDocument on Form, browser will follow this redirect properly
+        return error;
+      }
+      
+      // For other redirects, convert to Remix redirect
       if (location && [301, 302, 303, 307, 308].includes(error.status)) {
         console.log(`[App Action] Converting auth redirect Response into Remix redirect(${location})`);
         return redirect(location);
