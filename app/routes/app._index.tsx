@@ -41,11 +41,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const message = url.searchParams.get("message");
     return json({ shop: session.shop, result, productId, message });
   } catch (error) {
-    // If it's a Response (redirect), let it through - this is the OAuth flow
+    // If Shopify auth needs to redirect (or returns an HTML "exit-iframe" response),
+    // DO NOT `throw` it here. Returning preserves Shopify's intended behavior and avoids Remix
+    // treating a 200 HTML body as an ErrorResponse on the client.
     if (error instanceof Response) {
-      console.log(`[App Loader] Redirecting to OAuth login. Status: ${error.status} ${error.statusText}`);
-      console.log(`[App Loader] Redirect location: ${error.headers.get('Location') || 'unknown'}`);
-      throw error;
+      console.log(
+        `[App Loader] Returning auth Response. Status: ${error.status} ${error.statusText} Location: ${
+          error.headers.get("Location") || "n/a"
+        }`
+      );
+      return error;
     }
     // Log other errors for debugging
     console.error("[App Loader] Error:", error);
@@ -170,14 +175,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log("[App Action] ========== ACTION COMPLETED SUCCESSFULLY ==========");
     return redirect(redirectUrl);
   } catch (error) {
-    // If error is a Response (redirect), let it through - this is the OAuth flow
-    // shopify.authenticate.admin throws Response when session is invalid/expired
+    // Shopify auth may throw a Response (302 redirect) OR a 200 HTML "exit-iframe" response.
+    // For embedded apps, we must RETURN it so the browser executes the script / follows the redirect.
+    // Throwing can make Remix treat it as an ErrorResponse, which is what you're seeing in the console.
     if (error instanceof Response) {
-      console.log("[App Action] Received Response (redirect) from shopify.authenticate.admin");
+      console.log("[App Action] Returning auth Response from shopify.authenticate.admin");
       console.log("[App Action] Response Status:", error.status);
-      console.log("[App Action] Response Location:", error.headers.get('location'));
-      console.log("[App Action] This is normal OAuth flow - letting redirect through");
-      throw error; // Let Remix handle the redirect
+      console.log("[App Action] Response Location:", error.headers.get("location"));
+      return error;
     }
     
     console.error("[App Action] ========== ERROR OCCURRED ==========");
