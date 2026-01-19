@@ -388,9 +388,43 @@ export default function Index() {
   const [keywords, setKeywords] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
+  // Restore form data from localStorage after session refresh
+  useEffect(() => {
+    console.log("[App UI] === VERSION 3.0 LOADED ===");
+    
+    // If session was refreshed, restore form data from localStorage
+    if (sessionRefreshed) {
+      console.log("[App UI] Session was refreshed, restoring form data from localStorage");
+      try {
+        const savedKeywords = localStorage.getItem("ezproduct_keywords");
+        const savedImageUrl = localStorage.getItem("ezproduct_imageUrl");
+        if (savedKeywords) {
+          console.log("[App UI] Restored keywords:", savedKeywords);
+          setKeywords(savedKeywords);
+        }
+        if (savedImageUrl) {
+          console.log("[App UI] Restored imageUrl:", savedImageUrl);
+          setImageUrl(savedImageUrl);
+        }
+      } catch (e) {
+        console.error("[App UI] Failed to restore form data:", e);
+      }
+    }
+    
+    // Clear localStorage if we have a result (success or error)
+    if (result) {
+      console.log("[App UI] Clearing localStorage (have result)");
+      try {
+        localStorage.removeItem("ezproduct_keywords");
+        localStorage.removeItem("ezproduct_imageUrl");
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }, [sessionRefreshed, result]);
+
   // Debug: Log form submission state
   useEffect(() => {
-    console.log("[App UI] === VERSION 2.0 LOADED ===");
     console.log("[App UI] Navigation state changed:", navigation.state);
     console.log("[App UI] isSubmitting:", isSubmitting);
     if (navigation.state === "submitting") {
@@ -460,9 +494,18 @@ export default function Index() {
             reloadDocument
             onSubmit={(e) => {
               setDocumentSubmitting(true);
-              console.log("[App UI] Form onSubmit triggered! (v2.0)");
+              console.log("[App UI] Form onSubmit triggered! (v3.0)");
               console.log("[App UI] Keywords state:", keywords);
               console.log("[App UI] ImageUrl state:", imageUrl);
+              
+              // Save form data to localStorage in case session needs refresh
+              try {
+                localStorage.setItem("ezproduct_keywords", keywords);
+                localStorage.setItem("ezproduct_imageUrl", imageUrl);
+                console.log("[App UI] Saved form data to localStorage");
+              } catch (err) {
+                console.error("[App UI] Failed to save to localStorage:", err);
+              }
               
               // Debug: Check hidden inputs directly
               const form = e.currentTarget;
