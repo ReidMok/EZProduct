@@ -181,12 +181,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // admin.graphql returns a Response object that needs to be parsed, not returned to browser
     // The actual product creation will handle any auth issues properly
     
+    // Pass imageUrl as imageUrls array if provided
+    const imageUrls = imageUrl && imageUrl.trim() ? [imageUrl.trim()] : undefined;
+    
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
       accessToken: session.accessToken!,
       session: session, // Pass the actual Session instance
       admin: admin, // Pass the admin object from Shopify App Remix
       debugId,
+      imageUrls,
     });
     console.log("[App Action] Shopify sync completed. Product ID:", shopifyResult.productId);
     console.log("[App Action] Product Handle:", shopifyResult.productHandle);

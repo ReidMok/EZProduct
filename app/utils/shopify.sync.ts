@@ -12,6 +12,7 @@ interface ShopifyConfig {
   session: Session; // Pass the actual session from shopify.authenticate.admin()
   admin: any; // Pass the admin object from shopify.authenticate.admin()
   debugId?: string;
+  imageUrls?: string[]; // Optional image URLs to attach to the product
 }
 
 /**
@@ -23,10 +24,9 @@ interface ShopifyConfig {
  */
 export async function createShopifyProduct(
   product: GeneratedProduct,
-  config: ShopifyConfig,
-  imageUrls?: string[]
+  config: ShopifyConfig
 ): Promise<{ productId: string; productHandle: string }> {
-  const { admin, session, debugId } = config;
+  const { admin, session, debugId, imageUrls } = config;
   const pfx = debugId ? `[Shopify Sync][debugId=${debugId}]` : "[Shopify Sync]";
 
   // Validate admin object
@@ -351,8 +351,17 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
     ];
   }
 
-  // keep images disabled by default; add back after base create works
-  void imageUrls;
+  // Add images if provided (as URLs)
+  // Shopify will download and store these images automatically
+  if (imageUrls && imageUrls.length > 0) {
+    input.media = imageUrls
+      .filter((url) => url && url.trim())
+      .map((url) => ({
+        originalSource: url.trim(),
+        mediaContentType: "IMAGE",
+      }));
+  }
+
   return input;
 }
 
