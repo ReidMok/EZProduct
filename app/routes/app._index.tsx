@@ -177,58 +177,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       adminKeys: admin ? Object.keys(admin) : [],
     });
     
-    // Test admin.graphql directly to see if it works
-    // IMPORTANT: If this returns a Response (302 redirect), it means embedded session token needs refresh
-    // We should let it through immediately, not continue with product creation
-    console.log("[App Action] Testing admin.graphql with a simple query...");
-    try {
-      const testQuery = `query { shop { name } }`;
-      const testResponse = await admin.graphql(testQuery);
-      console.log("[App Action] Test query response type:", typeof testResponse);
-      console.log("[App Action] Test query response keys:", testResponse ? Object.keys(testResponse) : 'null');
-      if (testResponse && typeof testResponse === 'object' && 'status' in testResponse) {
-        const response = testResponse as Response;
-        const contentType = response.headers.get("content-type") || "";
-        console.error("[App Action] Test query returned Response object (redirect)! Status:", response.status);
-        console.error("[App Action] Test query Response headers:", Object.fromEntries(response.headers.entries()));
-        const location = response.headers.get("location") || response.headers.get("Location") || "";
-
-        // IMPORTANT:
-        // Shopify embedded auth can return:
-        // - 302 redirect to /auth/exit-iframe
-        // - 200 text/plain (or text/html) body containing a script to refresh token / break out of iframe
-        // In both cases, return the Response to the browser (Form reloadDocument) so it can execute the script.
-        const isJson = contentType.includes("application/json");
-        const isAuthFlow =
-          (response.status >= 300 && response.status < 400) ||
-          location.includes("/auth/exit-iframe") ||
-          location.includes("/auth/session-token") ||
-          !isJson;
-        if (isAuthFlow) {
-          console.log("[App Action] Embedded auth/session flow detected. Returning Response to browser.");
-          return response;
-        }
-      } else {
-        console.log("[App Action] Test query succeeded! Response:", JSON.stringify(testResponse, null, 2).substring(0, 200));
-      }
-    } catch (testError: any) {
-      // If testError is a Response (redirect), return it immediately
-      if (testError instanceof Response) {
-        const contentType = testError.headers.get("content-type") || "";
-        const location = testError.headers.get("location") || testError.headers.get("Location") || "";
-        const isJson = contentType.includes("application/json");
-        const isAuthFlow =
-          (testError.status >= 300 && testError.status < 400) ||
-          location.includes("/auth/exit-iframe") ||
-          location.includes("/auth/session-token") ||
-          !isJson;
-        if (isAuthFlow) {
-          console.log("[App Action] Test query threw auth/session Response. Returning it.");
-          return testError;
-        }
-      }
-      console.error("[App Action] Test query failed:", testError);
-    }
+    // Skip the test query - it was causing false positives for auth flow detection
+    // admin.graphql returns a Response object that needs to be parsed, not returned to browser
+    // The actual product creation will handle any auth issues properly
     
     const shopifyResult = await createShopifyProduct(generatedProduct, {
       shop: session.shop,
