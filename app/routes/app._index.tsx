@@ -367,6 +367,7 @@ export default function Index() {
 
   // Debug: Log form submission state
   useEffect(() => {
+    console.log("[App UI] === VERSION 2.0 LOADED ===");
     console.log("[App UI] Navigation state changed:", navigation.state);
     console.log("[App UI] isSubmitting:", isSubmitting);
     if (navigation.state === "submitting") {
@@ -429,11 +430,23 @@ export default function Index() {
             reloadDocument
             onSubmit={(e) => {
               setDocumentSubmitting(true);
-              console.log("[App UI] Form onSubmit triggered!");
-              console.log("[App UI] Keywords:", keywords);
-              console.log("[App UI] ImageUrl:", imageUrl);
-              console.log("[App UI] Form data:", new FormData(e.currentTarget));
-              // Don't prevent default - let Remix handle it
+              console.log("[App UI] Form onSubmit triggered! (v2.0)");
+              console.log("[App UI] Keywords state:", keywords);
+              console.log("[App UI] ImageUrl state:", imageUrl);
+              
+              // Debug: Check hidden inputs directly
+              const form = e.currentTarget;
+              const hiddenKeywords = form.querySelector('input[name="keywords"]') as HTMLInputElement;
+              const hiddenImageUrl = form.querySelector('input[name="imageUrl"]') as HTMLInputElement;
+              console.log("[App UI] Hidden keywords input value:", hiddenKeywords?.value);
+              console.log("[App UI] Hidden imageUrl input value:", hiddenImageUrl?.value);
+              
+              const formData = new FormData(form);
+              console.log("[App UI] FormData entries:");
+              for (const [key, value] of formData.entries()) {
+                console.log(`  ${key}: ${value}`);
+              }
+              // Don't prevent default - let browser submit
             }}
           >
             {/* Hidden inputs to ensure values are submitted with reloadDocument.
