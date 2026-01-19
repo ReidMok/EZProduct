@@ -61,7 +61,15 @@ export async function createShopifyProduct(
         mutation: `
           mutation productCreate($product: ProductCreateInput!) {
             productCreate(product: $product) {
-              product { id handle title status }
+              product { 
+                id 
+                handle 
+                title 
+                status
+                variants(first: 10) {
+                  nodes { id title }
+                }
+              }
               userErrors { field message }
             }
           }
@@ -73,7 +81,15 @@ export async function createShopifyProduct(
         mutation: `
           mutation productCreate($product: ProductCreateInput!) {
             productCreate(product: $product) {
-              product { id handle title status }
+              product { 
+                id 
+                handle 
+                title 
+                status
+                variants(first: 10) {
+                  nodes { id title }
+                }
+              }
               userErrors { field message }
             }
           }
@@ -86,7 +102,15 @@ export async function createShopifyProduct(
         mutation: `
           mutation productCreate($input: ProductInput!) {
             productCreate(input: $input) {
-              product { id handle title status }
+              product { 
+                id 
+                handle 
+                title 
+                status
+                variants(first: 10) {
+                  nodes { id title }
+                }
+              }
               userErrors { field message }
             }
           }
@@ -106,66 +130,86 @@ export async function createShopifyProduct(
     }
     const productId = createdProduct.id as string;
 
-    // Step 2: Create all variants using productVariantsBulkCreate
-    const variantsCandidates: Array<{ name: string; mutation: string; variables: any }> = [
-      {
-        name: "productVariantsBulkCreate(ProductVariantsBulkInput + option/value)",
-        mutation: `
-          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkCreate(productId: $productId, variants: $variants) {
-              productVariants { id title price sku }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: {
-          productId,
-          variants: buildVariantsBulkInput(product.variants, "option_value"),
-        },
-      },
-      {
-        name: "productVariantsBulkCreate(ProductVariantsBulkInput + optionName/name)",
-        mutation: `
-          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkCreate(productId: $productId, variants: $variants) {
-              productVariants { id title price sku }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: {
-          productId,
-          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
-        },
-      },
-      {
-        name: "productVariantsBulkCreate(+strategy REMOVE_STANDALONE_VARIANT)",
-        mutation: `
-          mutation productVariantsBulkCreate($productId: ID!, $strategy: ProductVariantsBulkCreateStrategy!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkCreate(productId: $productId, strategy: $strategy, variants: $variants) {
-              productVariants { id title price sku }
-              userErrors { field message }
-            }
-          }
-        `,
-        variables: {
-          productId,
-          strategy: "REMOVE_STANDALONE_VARIANT",
-          variants: buildVariantsBulkInput(product.variants, "optionName_name"),
-        },
-      },
-    ];
+    // Check if variants were auto-created by productCreate (when productOptions.values was passed)
+    const existingVariants = createdProduct.variants?.nodes || createdProduct.variants || [];
+    console.log(`${pfx} Product created. Existing variants count:`, existingVariants.length);
+    
+    if (existingVariants.length > 0) {
+      // Step 2a: Update existing variants with prices using productVariantsBulkUpdate
+      console.log(`${pfx} Step 2: Updating ${existingVariants.length} existing variants with prices...`);
+      
+      // Map our variant data to existing variant IDs by matching size
+      const variantUpdates = existingVariants.map((existingVariant: any) => {
+        // Extract size from variant title (e.g., "6inch" from title "Product / 6inch")
+        const variantTitle = existingVariant.title || "";
+        const matchingVariant = product.variants.find((v) => variantTitle.includes(v.size));
+        
+        return {
+          id: existingVariant.id,
+          price: matchingVariant ? matchingVariant.price.toString() : product.variants[0]?.price.toString() || "19.99",
+          compareAtPrice: matchingVariant && matchingVariant.compareAtPrice > 0 
+            ? matchingVariant.compareAtPrice.toString() 
+            : undefined,
+        };
+      });
 
-    console.log(`${pfx} Step 2: Creating variants... candidates=${variantsCandidates.length}`);
-    const variantsResult = await runGraphqlWithCandidates(admin, variantsCandidates, pfx);
-    const variantsData = variantsResult as any;
-    if (variantsData?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
-      const errors = variantsData.data.productVariantsBulkCreate.userErrors;
-      const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
-      throw new Error(`Shopify API user errors (variants): ${errorMessages}`);
+      const updateMutation = `
+        mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id title price }
+            userErrors { field message }
+          }
+        }
+      `;
+      
+      try {
+        const updateRaw = await admin.graphql(updateMutation, {
+          variables: { productId, variants: variantUpdates },
+        });
+        const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
+        
+        if (updateResult?.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
+          const errors = updateResult.data.productVariantsBulkUpdate.userErrors;
+          console.error(`${pfx} Variant update errors:`, JSON.stringify(errors, null, 2));
+          // Don't fail - product was created successfully, just prices weren't updated
+        } else {
+          console.log(`${pfx} Variants updated with prices successfully!`);
+        }
+      } catch (updateError) {
+        console.error(`${pfx} Failed to update variant prices:`, updateError);
+        // Don't fail - product was created successfully
+      }
+    } else {
+      // Step 2b: No variants exist, create them using productVariantsBulkCreate
+      const variantsCandidates: Array<{ name: string; mutation: string; variables: any }> = [
+        {
+          name: "productVariantsBulkCreate(ProductVariantsBulkInput + optionName/name)",
+          mutation: `
+            mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+              productVariantsBulkCreate(productId: $productId, variants: $variants) {
+                productVariants { id title price }
+                userErrors { field message }
+              }
+            }
+          `,
+          variables: {
+            productId,
+            variants: buildVariantsBulkInput(product.variants, "optionName_name"),
+          },
+        },
+      ];
+
+      console.log(`${pfx} Step 2: Creating variants...`);
+      const variantsResult = await runGraphqlWithCandidates(admin, variantsCandidates, pfx);
+      const variantsData = variantsResult as any;
+      if (variantsData?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
+        const errors = variantsData.data.productVariantsBulkCreate.userErrors;
+        const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
+        throw new Error(`Shopify API user errors (variants): ${errorMessages}`);
+      }
     }
 
-    console.log(`${pfx} Product and variants created successfully!`);
+    console.log(`${pfx} Product and variants created/updated successfully!`);
 
     return {
       productId: productId,
@@ -280,6 +324,7 @@ function uniqueSizes(product: GeneratedProduct): string[] {
  * Preferred schema for API 2025-04: ProductCreateInput + descriptionHtml + productOptions
  */
 function buildProductCreateInputForProductCreate(product: GeneratedProduct, imageUrls?: string[]) {
+  const sizeValues = uniqueSizes(product);
   const input: any = {
     title: product.title,
     vendor: "EZProduct",
@@ -295,9 +340,16 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
     input.tags = Array.isArray(product.tags) ? product.tags.filter((t) => t && t.trim()) : product.tags;
   }
 
-  // DO NOT pass productOptions here - it causes Shopify to auto-create variants
-  // which then conflict with productVariantsBulkCreate
-  // Variants will be created separately with their prices
+  // Define productOptions with values - Shopify needs to know about the Size option
+  // productVariantsBulkCreate will UPDATE these variants with prices, not CREATE new ones
+  if (sizeValues.length > 0) {
+    input.productOptions = [
+      {
+        name: "Size",
+        values: sizeValues.map((name) => ({ name })),
+      },
+    ];
+  }
 
   // keep images disabled by default; add back after base create works
   void imageUrls;
