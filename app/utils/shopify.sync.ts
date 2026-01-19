@@ -280,7 +280,6 @@ function uniqueSizes(product: GeneratedProduct): string[] {
  * Preferred schema for API 2025-04: ProductCreateInput + descriptionHtml + productOptions
  */
 function buildProductCreateInputForProductCreate(product: GeneratedProduct, imageUrls?: string[]) {
-  const sizeValues = uniqueSizes(product);
   const input: any = {
     title: product.title,
     vendor: "EZProduct",
@@ -296,14 +295,9 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
     input.tags = Array.isArray(product.tags) ? product.tags.filter((t) => t && t.trim()) : product.tags;
   }
 
-  if (sizeValues.length > 0) {
-    input.productOptions = [
-      {
-        name: "Size",
-        values: sizeValues.map((name) => ({ name })),
-      },
-    ];
-  }
+  // DO NOT pass productOptions here - it causes Shopify to auto-create variants
+  // which then conflict with productVariantsBulkCreate
+  // Variants will be created separately with their prices
 
   // keep images disabled by default; add back after base create works
   void imageUrls;
@@ -311,17 +305,8 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
 }
 
 function buildProductCreateInputForProductCreateAltValues(product: GeneratedProduct, imageUrls?: string[]) {
-  const sizeValues = uniqueSizes(product);
-  const input: any = buildProductCreateInputForProductCreate(product, imageUrls);
-  if (sizeValues.length > 0) {
-    input.productOptions = [
-      {
-        name: "Size",
-        values: sizeValues,
-      },
-    ];
-  }
-  return input;
+  // Same as buildProductCreateInputForProductCreate - no productOptions to avoid variant conflicts
+  return buildProductCreateInputForProductCreate(product, imageUrls);
 }
 
 /**
