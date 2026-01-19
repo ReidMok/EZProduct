@@ -436,10 +436,14 @@ export default function Index() {
               // Don't prevent default - let Remix handle it
             }}
           >
+            {/* Hidden inputs to ensure values are submitted with reloadDocument.
+                Polaris TextField doesn't always sync to native form fields. */}
+            <input type="hidden" name="keywords" value={keywords} />
+            <input type="hidden" name="imageUrl" value={imageUrl} />
+
             <BlockStack gap="400">
               <TextField
                 label="Product Keywords"
-                name="keywords"
                 type="text"
                 value={keywords}
                 onChange={(value) => {
@@ -454,7 +458,6 @@ export default function Index() {
 
               <TextField
                 label="Product Image URL (Optional)"
-                name="imageUrl"
                 type="url"
                 value={imageUrl}
                 onChange={(value) => {
