@@ -43,6 +43,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // shopify.authenticate.admin may throw a Response (redirect) if authentication is needed
   // We need to let it throw, not catch it
   // If it throws a Response, it's a redirect to OAuth login, let it through
+  // Check if session was just refreshed (cookie set by action)
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const sessionRefreshed = cookieHeader.includes("session_refreshed=1");
+  if (sessionRefreshed) {
+    console.log("[App Loader] Session was just refreshed (detected cookie)");
+  }
+
   try {
     console.log(`[App Loader] Calling shopify.authenticate.admin...`);
     const { session } = await shopify.authenticate.admin(request);
@@ -51,7 +58,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const result = url.searchParams.get("result");
     const productId = url.searchParams.get("productId");
     const message = url.searchParams.get("message");
-    return json({ shop: session.shop, result, productId, message });
+    
+    // If session was refreshed, clear the cookie and add flag to response
+    if (sessionRefreshed) {
+      return json(
+        { shop: session.shop, result, productId, message, sessionRefreshed: true },
+        {
+          headers: {
+            "Set-Cookie": "session_refreshed=; Path=/; Max-Age=0; SameSite=Lax",
+          },
+        }
+      );
+    }
+    
+    return json({ shop: session.shop, result, productId, message, sessionRefreshed: false });
   } catch (error) {
     // If Shopify auth needs to redirect (or returns an HTML "exit-iframe" response),
     // DO NOT `throw` it here. Returning preserves Shopify's intended behavior and avoids Remix
@@ -272,13 +292,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const location = error.headers.get("location") || error.headers.get("Location");
       console.log("[App Action] Response Location:", location);
       
-      // If it's a redirect to /auth/exit-iframe, return the Response directly
-      // This allows the browser to execute the exit-iframe script and refresh the embedded session token
-      if (location && location.includes('/auth/exit-iframe')) {
-        console.log("[App Action] Embedded session token needs refresh. Returning Response directly for browser to handle.");
-        // Return the Response as-is so browser can execute exit-iframe script
-        // With reloadDocument on Form, browser will follow this redirect properly
-        return error;
+      // If it's a redirect to /auth/exit-iframe or /auth/session-token, the session needs refresh
+      // Set a cookie so we can show a friendly message after the refresh completes
+      if (location && (location.includes('/auth/exit-iframe') || location.includes('/auth/session-token'))) {
+        console.log("[App Action] Session token needs refresh. Setting cookie and redirecting.");
+        // Set cookie to show message after refresh, then redirect
+        return redirect(location, {
+          headers: {
+            "Set-Cookie": "session_refreshed=1; Path=/; Max-Age=30; SameSite=Lax",
+          },
+        });
       }
       
       // For other redirects, convert to Remix redirect
@@ -356,7 +379,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Index() {
-  const { shop, result, productId, message } = useLoaderData<typeof loader>();
+  const { shop, result, productId, message, sessionRefreshed } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
 
@@ -398,6 +421,13 @@ export default function Index() {
       subtitle="Generate complete product listings with AI and sync to your store"
     >
       <BlockStack gap="500">
+        {sessionRefreshed && !result && (
+          <Banner tone="warning" title="会话已刷新 / Session Refreshed">
+            <p>您的会话令牌已刷新。请重新点击"Generate & Sync Product"按钮生成产品。</p>
+            <p>Your session token has been refreshed. Please click the button again to generate your product.</p>
+          </Banner>
+        )}
+
         {result === "error" && message && (
           <Banner tone="critical" title="Error">
             <p>{message}</p>
