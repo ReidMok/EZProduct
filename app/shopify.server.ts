@@ -120,6 +120,13 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(",") || ["write_products", "read_products"],
   appUrl: process.env.SHOPIFY_APP_URL || "https://localhost:3000",
   sessionStorage: new ShopifyPrismaSessionStorage(prisma),
+  // Enable Token Exchange for embedded apps - this automatically refreshes session tokens
+  // instead of requiring manual redirects, solving the "session token expired" loop
+  future: {
+    unstable_newEmbeddedAuthStrategy: true,
+  },
+  // For embedded apps, we need to specify the auth path prefix
+  authPathPrefix: "/auth",
 });
 
 export default shopify;
