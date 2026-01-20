@@ -211,6 +211,55 @@ export async function createShopifyProduct(
 
     console.log(`${pfx} Product and variants created/updated successfully!`);
 
+    // Step 3: Add images if provided
+    if (imageUrls && imageUrls.length > 0) {
+      console.log(`${pfx} Step 3: Adding ${imageUrls.length} image(s) to product...`);
+      
+      const mediaMutation = `
+        mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+          productCreateMedia(productId: $productId, media: $media) {
+            media {
+              ... on MediaImage {
+                id
+                image {
+                  url
+                }
+              }
+            }
+            mediaUserErrors {
+              field
+              message
+            }
+          }
+        }
+      `;
+      
+      const mediaInput = imageUrls
+        .filter((url) => url && url.trim())
+        .map((url) => ({
+          originalSource: url.trim(),
+          mediaContentType: "IMAGE",
+        }));
+      
+      try {
+        const mediaRaw = await admin.graphql(mediaMutation, {
+          variables: { productId, media: mediaInput },
+        });
+        const mediaResult = await normalizeAdminGraphqlResult(mediaRaw, pfx);
+        
+        if (mediaResult?.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
+          const errors = mediaResult.data.productCreateMedia.mediaUserErrors;
+          console.error(`${pfx} Media upload errors:`, JSON.stringify(errors, null, 2));
+          // Don't fail - product was created successfully, just images weren't added
+        } else {
+          console.log(`${pfx} Images added successfully!`);
+        }
+      } catch (mediaError) {
+        console.error(`${pfx} Failed to add images:`, mediaError);
+        // Don't fail - product was created successfully
+      }
+    }
+
     return {
       productId: productId,
       productHandle: createdProduct.handle,
@@ -351,16 +400,9 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
     ];
   }
 
-  // Add images if provided (as URLs)
-  // Shopify will download and store these images automatically
-  if (imageUrls && imageUrls.length > 0) {
-    input.media = imageUrls
-      .filter((url) => url && url.trim())
-      .map((url) => ({
-        originalSource: url.trim(),
-        mediaContentType: "IMAGE",
-      }));
-  }
+  // Images are added separately after product creation using productCreateMedia mutation
+  // (productCreate doesn't reliably support media field across all API versions)
+  void imageUrls;
 
   return input;
 }
