@@ -112,3 +112,6 @@ https://shopifyezproduct.vercel.app/auth?shop=你的商店.myshopify.com
 
 先确认 Shopify Partner Dashboard 中的 Redirect URLs 配置，然后使用安装链接重新安装，告诉我结果！
 
+
+
+

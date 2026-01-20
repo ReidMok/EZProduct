@@ -89,3 +89,6 @@
 
 先确认 Shopify Partner Dashboard 配置，然后重新安装应用，告诉我结果！
 
+
+
+

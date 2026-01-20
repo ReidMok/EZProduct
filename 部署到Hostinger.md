@@ -374,3 +374,6 @@ DATABASE_URL=mysql://用户名:密码@localhost:3306/ezproduct
 - 检查数据库连接字符串
 - 检查防火墙是否允许 PostgreSQL 连接
 
+
+
+

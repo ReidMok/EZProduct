@@ -31,3 +31,6 @@ echo "   1. 在 Hostinger 中选择 '上传文件'"
 echo "   2. 上传 ezproduct.tar.gz"
 echo "   3. 配置部署设置"
 
+
+
+

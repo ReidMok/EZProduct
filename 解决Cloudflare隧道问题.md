@@ -104,3 +104,6 @@ application_url = "https://localhost:3000"
 - ⏳ 需要更新 Shopify Partners Dashboard 中的 URL
 - ⏳ 然后运行 `npm run dev` 启动
 
+
+
+

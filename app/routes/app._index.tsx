@@ -206,6 +206,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       admin: admin, // Pass the admin object from Shopify App Remix
       debugId,
       imageUrls,
+      brandName: brandName.trim() || undefined,
     });
     console.log("[App Action] Shopify sync completed. Product ID:", shopifyResult.productId);
     console.log("[App Action] Product Handle:", shopifyResult.productHandle);

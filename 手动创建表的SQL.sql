@@ -46,3 +46,6 @@ ALTER TABLE "ProductGeneration"
   FOREIGN KEY ("shopId") REFERENCES "Shop"("id") 
   ON DELETE CASCADE ON UPDATE CASCADE;
 
+
+
+

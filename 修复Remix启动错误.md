@@ -94,3 +94,6 @@ lsof -i :3000
 
 现在在终端2中运行 `npx remix dev -c "node server.js"`，然后告诉我结果。
 
+
+
+

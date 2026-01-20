@@ -150,3 +150,6 @@ https://supabase.com/dashboard/project/你的项目ID/settings/database
 
 **找到 DATABASE_URL 后，告诉我完整的连接字符串（可以隐藏密码），我帮你确认格式是否正确！**
 
+
+
+

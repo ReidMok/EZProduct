@@ -104,3 +104,6 @@ SHOPIFY_API_SECRET=你的Client_Secret或API_Secret
 2. 填入 `.env` 文件的 `SHOPIFY_API_KEY` 和 `SHOPIFY_API_SECRET`
 3. 然后就可以启动应用了！
 
+
+
+

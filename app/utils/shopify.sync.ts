@@ -13,6 +13,8 @@ interface ShopifyConfig {
   admin: any; // Pass the admin object from shopify.authenticate.admin()
   debugId?: string;
   imageUrls?: string[]; // Optional image URLs to attach to the product
+  brandName?: string; // Optional brand/vendor name for the product
+  productType?: string; // Optional product type/category
 }
 
 /**
@@ -26,7 +28,7 @@ export async function createShopifyProduct(
   product: GeneratedProduct,
   config: ShopifyConfig
 ): Promise<{ productId: string; productHandle: string }> {
-  const { admin, session, debugId, imageUrls } = config;
+  const { admin, session, debugId, imageUrls, brandName, productType } = config;
   const pfx = debugId ? `[Shopify Sync][debugId=${debugId}]` : "[Shopify Sync]";
 
   // Validate admin object
@@ -52,8 +54,8 @@ export async function createShopifyProduct(
     // NOTE: Based on real logs (API version 2025-04), Shopify expects:
     //   productCreate(product: ProductCreateInput!)
     // and ProductInput does NOT include bodyHtml/options.
-    const productCreateInput = buildProductCreateInputForProductCreate(product, imageUrls);
-    const productCreateInputAlt = buildProductCreateInputForProductCreateAltValues(product, imageUrls);
+    const productCreateInput = buildProductCreateInputForProductCreate(product, imageUrls, brandName, productType);
+    const productCreateInputAlt = buildProductCreateInputForProductCreateAltValues(product, imageUrls, brandName, productType);
 
     const createCandidates: Array<{ name: string; mutation: string; variables: any }> = [
       {
@@ -372,13 +374,26 @@ function uniqueSizes(product: GeneratedProduct): string[] {
 /**
  * Preferred schema for API 2025-04: ProductCreateInput + descriptionHtml + productOptions
  */
-function buildProductCreateInputForProductCreate(product: GeneratedProduct, imageUrls?: string[]) {
+function buildProductCreateInputForProductCreate(
+  product: GeneratedProduct, 
+  imageUrls?: string[],
+  brandName?: string,
+  productType?: string
+) {
   const sizeValues = uniqueSizes(product);
   const input: any = {
     title: product.title,
-    vendor: "EZProduct",
-    productType: "AI Generated",
   };
+  
+  // Only set vendor if brand name is provided
+  if (brandName && brandName.trim()) {
+    input.vendor = brandName.trim();
+  }
+  
+  // Only set productType if provided
+  if (productType && productType.trim()) {
+    input.productType = productType.trim();
+  }
 
   // GraphQL uses descriptionHtml (NOT bodyHtml)
   if (product.descriptionHtml && product.descriptionHtml.trim()) {
@@ -407,9 +422,14 @@ function buildProductCreateInputForProductCreate(product: GeneratedProduct, imag
   return input;
 }
 
-function buildProductCreateInputForProductCreateAltValues(product: GeneratedProduct, imageUrls?: string[]) {
-  // Same as buildProductCreateInputForProductCreate - no productOptions to avoid variant conflicts
-  return buildProductCreateInputForProductCreate(product, imageUrls);
+function buildProductCreateInputForProductCreateAltValues(
+  product: GeneratedProduct, 
+  imageUrls?: string[],
+  brandName?: string,
+  productType?: string
+) {
+  // Same as buildProductCreateInputForProductCreate
+  return buildProductCreateInputForProductCreate(product, imageUrls, brandName, productType);
 }
 
 /**

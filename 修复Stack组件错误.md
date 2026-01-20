@@ -59,3 +59,6 @@ Remix dev server running on http://localhost:3000
 - 访问 `https://localhost:3000` 应该能看到应用
 - 或使用 Preview URL 在 Shopify 后台安装应用
 
+
+
+

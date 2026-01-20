@@ -38,9 +38,9 @@ function getModel(name: string) {
 }
 
 export interface ProductVariant {
-  size: string; // e.g., "6inch", "8inch", "10inch"
-  sizeCm: string; // e.g., "15cm*12.7cm*4cm"
-  sizeInch: string; // e.g., "6inch*5inch*1.5inch"
+  size: string; // Size name, e.g., "S", "M", "L" or "Small", "Medium", "Large"
+  sizeCm: string; // Dimensions in centimeters, or "N/A" if not applicable
+  sizeInch: string; // Dimensions in inches, or "N/A" if not applicable
   price: number;
   compareAtPrice: number;
   sku: string;
@@ -60,7 +60,7 @@ export interface ProductGenerationOptions {
   keywords: string;
   imageUrl?: string;
   /** 
-   * Custom size options, e.g., "S, M, L, XL" or "小号, 中号, 大号" or "6inch, 8inch, 10inch"
+   * Custom size options provided by user
    * If not provided, AI will generate appropriate sizes based on product type
    */
   sizeOptions?: string;
@@ -183,39 +183,45 @@ function buildPrompt(opts: ProductGenerationOptions): string {
     const sizes = sizeOptions.split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
     const sizeCount = Math.min(sizes.length, 5); // Max 5 variants
     
-    sizeInstruction = `3. Variants: Create exactly ${sizeCount} size variants based on user-specified sizes: "${sizeOptions}"
-   For each size, create appropriate dimensions based on the product type.
-   Each variant must include: size (use the exact size name provided), sizeCm (dimensions in cm), sizeInch (dimensions in inches), price (USD, increasing for larger sizes), compareAtPrice (2-3x price), sku (format: ${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size), weight (in grams, appropriate for product)`;
+    sizeInstruction = `3. Variants: Create exactly ${sizeCount} size variants using these user-specified sizes: "${sizeOptions}"
+   Use the EXACT size names provided by the user.
+   Each variant must include: size (use exact name provided), sizeCm (or "N/A"), sizeInch (or "N/A"), price (USD, reasonable for product), compareAtPrice (2-3x price), sku (format: ${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size), weight (in grams)`;
     
     variantExample = sizes.slice(0, sizeCount).map((size, i) => `    {
       "size": "${size}",
-      "sizeCm": "appropriate cm dimensions",
-      "sizeInch": "appropriate inch dimensions",
-      "price": ${(79.90 + i * 20).toFixed(2)},
-      "compareAtPrice": ${(200.00 + i * 50).toFixed(2)},
+      "sizeCm": "N/A",
+      "sizeInch": "N/A",
+      "price": ${(29.90 + i * 10).toFixed(2)},
+      "compareAtPrice": ${(59.90 + i * 20).toFixed(2)},
       "sku": "${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-${size}",
-      "weight": ${600 + i * 200}
+      "weight": ${300 + i * 100}
     }`).join(',\n');
   } else {
     // AI generates appropriate sizes based on product type
-    sizeInstruction = `3. Variants: Analyze the product type and create 2-4 appropriate size variants.
-   - For clothing: use S, M, L, XL (or 小号, 中号, 大号 for Chinese products)
-   - For home decor/figurines: use dimensions like 6inch, 8inch, 10inch
-   - For jewelry: use One Size or specific ring/bracelet sizes
-   - For bags: use Small, Medium, Large
-   - For electronics: use storage/capacity sizes
-   - For food/consumables: use weight-based sizes (100g, 250g, 500g)
-   Choose the most appropriate sizing system for this product type.
-   Each variant must include: size, sizeCm, sizeInch (or N/A if not applicable), price (USD), compareAtPrice (2-3x price), sku (format: ${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size), weight (in grams)`;
+    sizeInstruction = `3. Variants: Analyze the product type from the keywords and create 2-4 appropriate size variants.
+   Choose a sizing system that is STANDARD for this specific product category:
+   - Clothing/Apparel: S, M, L, XL or 小号, 中号, 大号
+   - Shoes: US/EU/UK shoe sizes
+   - Jewelry (rings): Ring sizes (5, 6, 7, 8, etc.) or One Size for bracelets/necklaces
+   - Bags/Backpacks: Small, Medium, Large
+   - Electronics: storage/memory sizes (64GB, 128GB, etc.)
+   - Food/Beverages: weight-based (100g, 250g, 500g) or volume-based
+   - Furniture/Large items: dimensions in cm or inches
+   - Art/Posters: standard frame sizes
+   - Cosmetics: volume (30ml, 50ml, 100ml)
+   - If the product doesn't typically have sizes, use "Standard" or "One Size"
+   
+   IMPORTANT: Only use dimension-based sizes (like cm/inches) if the product category normally uses them.
+   Each variant must include: size, sizeCm (or "N/A"), sizeInch (or "N/A"), price (USD), compareAtPrice (2-3x price), sku (format: ${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size), weight (in grams)`;
     
     variantExample = `    {
-      "size": "Size Name (appropriate for product)",
-      "sizeCm": "dimensions in cm",
-      "sizeInch": "dimensions in inches",
-      "price": 79.90,
-      "compareAtPrice": 200.00,
+      "size": "appropriate size name for this product category",
+      "sizeCm": "dimensions if applicable, or N/A",
+      "sizeInch": "dimensions if applicable, or N/A",
+      "price": 29.90,
+      "compareAtPrice": 59.90,
       "sku": "${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size",
-      "weight": 500
+      "weight": 300
     }`;
   }
   
@@ -229,26 +235,33 @@ function buildPrompt(opts: ProductGenerationOptions): string {
     ? `\n\nAdditional Product Information from seller:\n${productNotes}\nPlease incorporate this information into the product description.`
     : '';
 
-  const basePrompt = `You are an expert e-commerce product listing writer for general consumer products across multiple categories (home, lifestyle, fitness, pets, accessories, clothing, jewelry, etc.).
+  const basePrompt = `You are an expert e-commerce product listing writer. Your job is to create professional product listings based ONLY on the keywords provided by the user.
 
 Generate a complete product listing in JSON format for: "${keywords}"${brandInstruction}${notesInstruction}
 
+CRITICAL RULES:
+- Base ALL content strictly on the provided keywords
+- Do NOT add materials, features, or characteristics that are not mentioned in the keywords
+- Do NOT assume the product is made of any specific material (like resin, wood, ceramic) unless explicitly stated
+- Do NOT assume specific dimensions unless explicitly stated
+- Keep the description focused and relevant to what the keywords describe
+
 Requirements:
-1. Title: Create an SEO-optimized, attractive product title (max 100 characters).${brandName ? ` Include brand "${brandName}".` : ''} Include "Best Gift 🎁" if appropriate for gift-able products.
-2. Description: Write a detailed HTML description (500-800 words) that includes:
-   - Compelling product story and key features${brandName ? `\n   - Brand introduction for "${brandName}"` : ''}
-   - Detailed specifications
-   - Size comparison table showing dimensions in a clean HTML table format (use cm and/or inches as appropriate)
-   - Suitable use cases and gift ideas
+1. Title: Create an SEO-optimized, attractive product title (max 100 characters).${brandName ? ` Include brand "${brandName}".` : ''} Include "Best Gift 🎁" only if the product seems gift-appropriate.
+2. Description: Write a detailed HTML description (400-600 words) that includes:
+   - Product features based ONLY on the provided keywords${brandName ? `\n   - Brand mention for "${brandName}"` : ''}
+   - Relevant specifications (do not invent specifications not implied by keywords)
+   - Size/variant comparison table if multiple sizes exist
+   - Suitable use cases
    - Professional formatting with <p>, <ul>, <li>, <strong> tags
 ${sizeInstruction}
-4. Tags: Generate 15-25 relevant tags including: gift_idea, new_arrival, bestseller, home_lifestyle, minimalist_style, holiday_gift, and category-specific tags.
+4. Tags: Generate 15-20 relevant tags based on the product keywords, including category-specific tags.
 5. SEO: Generate SEO title and description (150-160 characters for description)
 
 Return ONLY valid JSON in this exact format:
 {
   "title": "Product Title",
-  "descriptionHtml": "<p>Full HTML description with size table...</p>",
+  "descriptionHtml": "<p>HTML description...</p>",
   "variants": [
 ${variantExample}
   ],
@@ -258,9 +271,9 @@ ${variantExample}
 }
 
 Important: 
-- The descriptionHtml MUST include a size comparison table in HTML format.
-- Use size names/units that are appropriate for this specific product category.
-- Prices should be realistic for the product type and size.`;
+- Only include a size table if multiple size variants exist
+- Use size names/units that are standard for this specific product category
+- Prices should be realistic for the product type`;
 
   if (imageUrl) {
     return `${basePrompt}\n\nProduct Image URL: ${imageUrl}\nPlease analyze the image and incorporate visual details into the description.`;
@@ -293,9 +306,9 @@ function validateAndFormatProduct(data: any): GeneratedProduct {
       throw new Error(`Variant ${index + 1} is missing required fields`);
     }
     // Ensure numeric values
-    variant.price = parseFloat(variant.price) || 79.90;
-    variant.compareAtPrice = parseFloat(variant.compareAtPrice) || variant.price * 2.5;
-    variant.weight = parseInt(variant.weight) || 500;
+    variant.price = parseFloat(variant.price) || 29.90;
+    variant.compareAtPrice = parseFloat(variant.compareAtPrice) || variant.price * 2;
+    variant.weight = parseInt(variant.weight) || 300;
   });
 
   // Ensure tags is an array
