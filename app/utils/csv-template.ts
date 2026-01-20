@@ -10,15 +10,16 @@ export const CSV_HEADERS = [
   'productNotes',       // Optional: Additional product info
 ] as const;
 
-export const CSV_TEMPLATE_EN = `keywords,imageUrl,sizeOptions,brandName,productNotes
+// CSV templates with bilingual headers and required/optional indicators
+export const CSV_TEMPLATE_EN = `keywords (关键词) [Required / 必填],imageUrl (图片链接) [Optional / 可选],sizeOptions (尺寸选项) [Optional / 可选],brandName (品牌名称) [Optional / 可选],productNotes (产品说明) [Optional / 可选]
 Yoga Mat,,S;M;L,YogaBrand,Premium non-slip surface
 Pet Collar,https://example.com/collar.jpg,Small;Medium;Large,PetPals,Adjustable leather collar
-Coffee Mug,,Standard,MugLife,Ceramic 350ml capacity`;
+Coffee Mug,,Standard,MugLife,350ml capacity`;
 
-export const CSV_TEMPLATE_ZH = `keywords,imageUrl,sizeOptions,brandName,productNotes
+export const CSV_TEMPLATE_ZH = `keywords (关键词) [Required / 必填],imageUrl (图片链接) [Optional / 可选],sizeOptions (尺寸选项) [Optional / 可选],brandName (品牌名称) [Optional / 可选],productNotes (产品说明) [Optional / 可选]
 瑜伽垫,,S;M;L,瑜伽品牌,高级防滑表面
 宠物项圈,https://example.com/collar.jpg,小号;中号;大号,宠物伙伴,可调节皮质项圈
-咖啡杯,,标准款,杯生活,陶瓷350ml容量`;
+咖啡杯,,标准款,杯生活,350ml容量`;
 
 export interface BatchProductRow {
   keywords: string;
@@ -42,19 +43,36 @@ export function parseCSV(csvContent: string): { rows: BatchProductRow[]; errors:
     return { rows, errors };
   }
 
-  // Parse header
-  const header = lines[0].split(',').map(h => h.trim().toLowerCase());
-  const keywordsIndex = header.indexOf('keywords');
+  // Parse header - handle bilingual headers with required/optional indicators
+  // Use parseCSVLine to handle quoted fields properly
+  const headerRaw = parseCSVLine(lines[0]);
+  const header = headerRaw.map(h => h.trim().toLowerCase());
+  
+  // Find column indices by matching English or Chinese keywords
+  // Support headers like "keywords (关键词) [Required / 必填]"
+  const findColumnIndex = (patterns: string[]): number => {
+    for (let i = 0; i < header.length; i++) {
+      const headerText = header[i];
+      for (const pattern of patterns) {
+        if (headerText.includes(pattern.toLowerCase())) {
+          return i;
+        }
+      }
+    }
+    return -1;
+  };
+  
+  const keywordsIndex = findColumnIndex(['keywords', '关键词']);
   
   if (keywordsIndex === -1) {
-    errors.push('CSV must have a "keywords" column');
+    errors.push('CSV must have a "keywords" or "关键词" column');
     return { rows, errors };
   }
 
-  const imageUrlIndex = header.indexOf('imageurl');
-  const sizeOptionsIndex = header.indexOf('sizeoptions');
-  const brandNameIndex = header.indexOf('brandname');
-  const productNotesIndex = header.indexOf('productnotes');
+  const imageUrlIndex = findColumnIndex(['imageurl', '图片链接']);
+  const sizeOptionsIndex = findColumnIndex(['sizeoptions', '尺寸选项']);
+  const brandNameIndex = findColumnIndex(['brandname', '品牌名称']);
+  const productNotesIndex = findColumnIndex(['productnotes', '产品说明']);
 
   // Parse data rows
   for (let i = 1; i < lines.length; i++) {
