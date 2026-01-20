@@ -21,6 +21,7 @@ import { generateProduct } from "../utils/ai.generator";
 import { createShopifyProduct } from "../utils/shopify.sync";
 import { prisma } from "../db.server";
 import { t, getSavedLanguage, saveLanguage, type Language } from "../utils/i18n";
+import { generateTemplateCSV, parseCSV, validateRow, type BatchProductRow } from "../utils/csv-template";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Log all requests to /app route
@@ -376,6 +377,113 @@ export default function Index() {
     setLang(newLang);
     saveLanguage(newLang);
   };
+  
+  // Batch upload state
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchResult, setBatchResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null);
+  
+  // Download CSV template
+  const handleDownloadTemplate = () => {
+    const csvContent = generateTemplateCSV(lang);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `product_template_${lang}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+  
+  // Handle file selection and batch processing
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    setSelectedFileName(file.name);
+    setBatchResult(null);
+    
+    try {
+      const content = await file.text();
+      const { rows, errors } = parseCSV(content);
+      
+      if (errors.length > 0) {
+        setBatchResult({ success: 0, failed: 0, errors });
+        return;
+      }
+      
+      if (rows.length === 0) {
+        setBatchResult({ success: 0, failed: 0, errors: [lang === 'zh' ? 'CSV 文件中没有有效数据' : 'No valid data in CSV file'] });
+        return;
+      }
+      
+      if (rows.length > 20) {
+        setBatchResult({ success: 0, failed: 0, errors: [lang === 'zh' ? '每批最多处理 20 个产品' : 'Maximum 20 products per batch'] });
+        return;
+      }
+      
+      // Validate all rows
+      const validationErrors: string[] = [];
+      rows.forEach(row => {
+        validationErrors.push(...validateRow(row));
+      });
+      
+      if (validationErrors.length > 0) {
+        setBatchResult({ success: 0, failed: 0, errors: validationErrors });
+        return;
+      }
+      
+      // Start batch processing
+      setBatchProcessing(true);
+      setBatchProgress({ current: 0, total: rows.length });
+      
+      let successCount = 0;
+      let failedCount = 0;
+      const processingErrors: string[] = [];
+      
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        setBatchProgress({ current: i + 1, total: rows.length });
+        
+        try {
+          // Create form data and submit
+          const formData = new FormData();
+          formData.append('keywords', row.keywords);
+          if (row.imageUrl) formData.append('imageUrl', row.imageUrl);
+          if (row.sizeOptions) formData.append('sizeOptions', row.sizeOptions);
+          if (row.brandName) formData.append('brandName', row.brandName);
+          if (row.productNotes) formData.append('productNotes', row.productNotes);
+          formData.append('batchMode', 'true');
+          
+          const response = await fetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+          });
+          
+          if (response.ok || response.redirected) {
+            successCount++;
+          } else {
+            failedCount++;
+            processingErrors.push(`Row ${row.rowNumber}: ${lang === 'zh' ? '处理失败' : 'Processing failed'}`);
+          }
+          
+          // Small delay between requests to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (err) {
+          failedCount++;
+          processingErrors.push(`Row ${row.rowNumber}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+      }
+      
+      setBatchResult({ success: successCount, failed: failedCount, errors: processingErrors });
+    } catch (err) {
+      setBatchResult({ success: 0, failed: 0, errors: [err instanceof Error ? err.message : 'Failed to read file'] });
+    } finally {
+      setBatchProcessing(false);
+      // Reset file input
+      event.target.value = '';
+    }
+  };
 
   // Restore form data from localStorage after session refresh
   useEffect(() => {
@@ -583,6 +691,65 @@ export default function Index() {
           </Form>
         </LegacyCard>
 
+        <LegacyCard sectioned title={t('batchTitle', lang)}>
+          <BlockStack gap="400">
+            <Text as="p">{t('batchDescription', lang)}</Text>
+            <Text as="p" tone="subdued">{t('csvInstructions', lang)}</Text>
+            <Text as="p" tone="subdued">{t('maxBatchSize', lang)}</Text>
+            
+            <InlineStack gap="300">
+              <Button onClick={handleDownloadTemplate}>
+                {t('downloadTemplate', lang)}
+              </Button>
+              
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileSelect}
+                  style={{
+                    position: 'absolute',
+                    opacity: 0,
+                    width: '100%',
+                    height: '100%',
+                    cursor: 'pointer',
+                  }}
+                  disabled={batchProcessing}
+                />
+                <Button disabled={batchProcessing}>
+                  {t('selectFile', lang)}
+                </Button>
+              </div>
+            </InlineStack>
+            
+            {selectedFileName && (
+              <Text as="p">📄 {selectedFileName}</Text>
+            )}
+            
+            {batchProcessing && (
+              <Banner tone="info">
+                <p>{t('batchProgress', lang).replace('{current}', String(batchProgress.current)).replace('{total}', String(batchProgress.total))}</p>
+              </Banner>
+            )}
+            
+            {batchResult && (
+              <Banner tone={batchResult.failed > 0 ? "warning" : "success"}>
+                <p>{t('batchComplete', lang).replace('{success}', String(batchResult.success)).replace('{failed}', String(batchResult.failed))}</p>
+                {batchResult.errors.length > 0 && (
+                  <>
+                    <p><strong>{t('batchErrors', lang)}</strong></p>
+                    <ul>
+                      {batchResult.errors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </Banner>
+            )}
+          </BlockStack>
+        </LegacyCard>
+        
         <LegacyCard sectioned title={t('howItWorksTitle', lang)}>
           <BlockStack gap="300">
             <Text as="p">

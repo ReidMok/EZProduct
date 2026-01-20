@@ -182,10 +182,21 @@ function buildPrompt(opts: ProductGenerationOptions): string {
     // User provided custom sizes
     const sizes = sizeOptions.split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
     const sizeCount = Math.min(sizes.length, 5); // Max 5 variants
+    const skuPrefix = brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD';
     
-    sizeInstruction = `3. Variants: Create exactly ${sizeCount} size variants using these user-specified sizes: "${sizeOptions}"
-   Use the EXACT size names provided by the user.
-   Each variant must include: size (use exact name provided), sizeCm (or "N/A"), sizeInch (or "N/A"), price (USD, reasonable for product), compareAtPrice (2-3x price), sku (format: ${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-size), weight (in grams)`;
+    sizeInstruction = `3. Variants: YOU MUST CREATE EXACTLY ${sizeCount} VARIANTS - one for each of these sizes: ${sizes.map(s => `"${s}"`).join(', ')}
+   
+   CRITICAL: The variants array MUST contain exactly ${sizeCount} objects, one for each size listed above.
+   DO NOT skip any sizes. DO NOT combine sizes. Create one variant per size.
+   
+   Each variant object must include:
+   - size: Use the EXACT size name as provided (${sizes.map(s => `"${s}"`).join(', ')})
+   - sizeCm: "N/A" (unless dimensions are relevant)
+   - sizeInch: "N/A" (unless dimensions are relevant)
+   - price: USD amount (increase slightly for larger sizes)
+   - compareAtPrice: 2-3x the price
+   - sku: Format "${skuPrefix}XXX-{size}"
+   - weight: in grams`;
     
     variantExample = sizes.slice(0, sizeCount).map((size, i) => `    {
       "size": "${size}",
@@ -193,7 +204,7 @@ function buildPrompt(opts: ProductGenerationOptions): string {
       "sizeInch": "N/A",
       "price": ${(29.90 + i * 10).toFixed(2)},
       "compareAtPrice": ${(59.90 + i * 20).toFixed(2)},
-      "sku": "${brandName ? brandName.substring(0, 3).toUpperCase() : 'PRD'}XXX-${size}",
+      "sku": "${skuPrefix}XXX-${size}",
       "weight": ${300 + i * 100}
     }`).join(',\n');
   } else {
@@ -270,8 +281,10 @@ ${variantExample}
   "seoDescription": "SEO description text"
 }
 
-Important: 
-- Only include a size table if multiple size variants exist
+CRITICAL REQUIREMENTS:
+- The variants array MUST contain the exact number of variants as specified above
+- Each variant MUST be a separate object in the array
+- DO NOT skip any sizes or combine them
 - Use size names/units that are standard for this specific product category
 - Prices should be realistic for the product type`;
 

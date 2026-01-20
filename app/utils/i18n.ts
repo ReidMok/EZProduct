@@ -75,6 +75,20 @@ export const translations = {
     step3Item4: "Relevant tags and SEO metadata",
     step4Title: "4. Auto Sync:",
     step4Desc: "Product is automatically created in your Shopify store",
+    
+    // Batch upload section
+    batchTitle: "Batch Upload",
+    batchDescription: "Generate multiple products at once using a CSV file",
+    downloadTemplate: "Download Template",
+    uploadFile: "Upload CSV File",
+    selectFile: "Select CSV File",
+    noFileSelected: "No file selected",
+    processingBatch: "Processing batch...",
+    batchProgress: "Processing {current} of {total}...",
+    batchComplete: "Batch complete! {success} succeeded, {failed} failed",
+    batchErrors: "Errors:",
+    csvInstructions: "CSV file format: keywords (required), imageUrl, sizeOptions (use semicolon ; to separate sizes), brandName, productNotes",
+    maxBatchSize: "Maximum 20 products per batch",
   },
   zh: {
     // Page header
@@ -145,6 +159,20 @@ export const translations = {
     step3Item4: "相关标签和 SEO 元数据",
     step4Title: "4. 自动同步：",
     step4Desc: "产品自动创建到你的 Shopify 店铺",
+    
+    // Batch upload section
+    batchTitle: "批量上传",
+    batchDescription: "使用 CSV 文件一次生成多个产品",
+    downloadTemplate: "下载模板",
+    uploadFile: "上传 CSV 文件",
+    selectFile: "选择 CSV 文件",
+    noFileSelected: "未选择文件",
+    processingBatch: "批量处理中...",
+    batchProgress: "正在处理 {current} / {total}...",
+    batchComplete: "批量处理完成！成功 {success} 个，失败 {failed} 个",
+    batchErrors: "错误信息：",
+    csvInstructions: "CSV 文件格式：keywords（必填）、imageUrl、sizeOptions（用分号 ; 分隔尺寸）、brandName、productNotes",
+    maxBatchSize: "每批最多处理 20 个产品",
   },
 } as const;
 
