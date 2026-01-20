@@ -2,7 +2,7 @@
 
 name = "EZProduct"
 client_id = "46a6a6c60a57cd723019c930a072aa10"
-application_url = "https://localhost:3000"
+application_url = "https://ezproduct-app.vercel.app"
 embedded = true
 
 [access_scopes]
@@ -11,15 +11,24 @@ scopes = "write_products,read_products,write_product_listings,read_product_listi
 
 [auth]
 redirect_urls = [
-  "https://localhost:3000/auth/callback",
-  "https://localhost:3000/auth/shopify/callback",
-  "https://localhost:3000/api/auth/callback"
+  "https://ezproduct-app.vercel.app/auth/callback",
+  "https://ezproduct-app.vercel.app/auth/shopify/callback",
+  "https://ezproduct-app.vercel.app/api/auth/callback"
 ]
 
 [webhooks]
 api_version = "2024-10"
 [[webhooks.subscriptions]]
 topics = ["app/uninstalled"]
+uri = "/webhooks"
+[[webhooks.subscriptions]]
+topics = ["customers/data_request"]
+uri = "/webhooks"
+[[webhooks.subscriptions]]
+topics = ["customers/redact"]
+uri = "/webhooks"
+[[webhooks.subscriptions]]
+topics = ["shop/redact"]
 uri = "/webhooks"
 
 [pos]
@@ -28,5 +37,4 @@ embedded = false
 [build]
 automatically_update_urls_on_dev = true
 dev_store_url = ""
-include_config_on_deploy = true
 
