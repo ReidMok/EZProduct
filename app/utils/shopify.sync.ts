@@ -549,6 +549,113 @@ export async function createShopifyProduct(
       }
     }
 
+    // Step 5: Publish product to Online Store
+    try {
+      console.log(`${pfx} Step 5: Publishing product to Online Store...`);
+      
+      // First, get the Online Store publication
+      const publicationsQuery = `
+        query {
+          publications(first: 10) {
+            nodes {
+              id
+              name
+            }
+          }
+        }
+      `;
+      
+      const publicationsRaw = await admin.graphql(publicationsQuery);
+      const publicationsResult = await normalizeAdminGraphqlResult(publicationsRaw, pfx);
+      const publications = publicationsResult?.data?.publications?.nodes || [];
+      
+      // Find Online Store publication
+      const onlineStorePub = publications.find((pub: any) => 
+        pub.name?.toLowerCase().includes('online store') ||
+        pub.name?.toLowerCase().includes('在线商店') ||
+        pub.name === 'Online Store'
+      ) || publications.find((pub: any) => pub.name?.toLowerCase().includes('online'));
+      
+      if (onlineStorePub) {
+        console.log(`${pfx} Found publication: ${onlineStorePub.name} (${onlineStorePub.id})`);
+        
+        // Publish product to this publication
+        const publishMutation = `
+          mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+            publishablePublish(id: $id, input: $input) {
+              publishable {
+                ... on Product {
+                  id
+                  publishedAt
+                }
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+        
+        try {
+          const publishRaw = await admin.graphql(publishMutation, {
+            variables: {
+              id: productId,
+              input: [{
+                publicationId: onlineStorePub.id,
+              }],
+            },
+          });
+          const publishResult = await normalizeAdminGraphqlResult(publishRaw, pfx);
+          
+          if (publishResult?.data?.publishablePublish?.userErrors?.length > 0) {
+            const errors = publishResult.data.publishablePublish.userErrors;
+            console.error(`${pfx} Publication errors:`, errors);
+          } else {
+            console.log(`${pfx} ✅ Successfully published product to ${onlineStorePub.name}`);
+          }
+        } catch (publishError) {
+          console.error(`${pfx} Failed to publish product:`, publishError);
+          // Don't fail - product was created successfully
+        }
+      } else {
+        console.log(`${pfx} Online Store publication not found (checked ${publications.length} publications)`);
+        // Try alternative: use productPublishToCurrentChannel
+        try {
+          const altPublishMutation = `
+            mutation productPublishToCurrentChannel($id: ID!) {
+              productPublishToCurrentChannel(id: $id) {
+                product {
+                  id
+                  publishedAt
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }
+          `;
+          
+          const altPublishRaw = await admin.graphql(altPublishMutation, {
+            variables: { id: productId },
+          });
+          const altPublishResult = await normalizeAdminGraphqlResult(altPublishRaw, pfx);
+          
+          if (altPublishResult?.data?.productPublishToCurrentChannel?.userErrors?.length > 0) {
+            console.error(`${pfx} Alternative publication errors:`, altPublishResult.data.productPublishToCurrentChannel.userErrors);
+          } else {
+            console.log(`${pfx} ✅ Successfully published product using productPublishToCurrentChannel`);
+          }
+        } catch (altPublishError) {
+          console.error(`${pfx} Alternative publication also failed:`, altPublishError);
+        }
+      }
+    } catch (publishError) {
+      console.error(`${pfx} Failed to publish product:`, publishError);
+      // Don't fail - product was created successfully
+    }
+
     return {
       productId: productId,
       productHandle: createdProduct.handle,
