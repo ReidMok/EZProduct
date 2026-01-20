@@ -143,17 +143,24 @@ export async function createShopifyProduct(
     // We need to update these variants with correct prices
     
     if (existingVariants.length >= product.variants.length) {
-      // Shopify created variants for each option value - just update prices
+      // Shopify created variants for each option value - update prices by matching names
       console.log(`${pfx} Step 2: Updating ${existingVariants.length} auto-created variants with prices...`);
       
-      for (let i = 0; i < existingVariants.length && i < product.variants.length; i++) {
-        const existingVariant = existingVariants[i];
-        const ourVariant = product.variants[i];
+      for (const existingVariant of existingVariants) {
+        // Match by title/name - Shopify may create variants in different order
+        const variantTitle = existingVariant.title || "";
+        const ourVariant = product.variants.find((v: ProductVariant) => 
+          variantTitle.toLowerCase().includes(v.size.toLowerCase()) ||
+          v.size.toLowerCase().includes(variantTitle.toLowerCase())
+        );
+        
+        // If no match found, use the first unmatched variant from our list
+        const priceVariant = ourVariant || product.variants[0];
         
         const updateMutation = `
           mutation productVariantUpdate($input: ProductVariantInput!) {
             productVariantUpdate(input: $input) {
-              productVariant { id title price }
+              productVariant { id title price inventoryItem { id } }
               userErrors { field message }
             }
           }
@@ -164,8 +171,8 @@ export async function createShopifyProduct(
             variables: {
               input: {
                 id: existingVariant.id,
-                price: ourVariant.price.toString(),
-                compareAtPrice: ourVariant.compareAtPrice > 0 ? ourVariant.compareAtPrice.toString() : undefined,
+                price: priceVariant.price.toString(),
+                compareAtPrice: priceVariant.compareAtPrice > 0 ? priceVariant.compareAtPrice.toString() : undefined,
               }
             },
           });
@@ -173,7 +180,7 @@ export async function createShopifyProduct(
           if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
             console.error(`${pfx} Variant update error for ${existingVariant.title}:`, updateResult.data.productVariantUpdate.userErrors);
           } else {
-            console.log(`${pfx} Updated variant ${existingVariant.title} with price $${ourVariant.price}`);
+            console.log(`${pfx} Updated variant "${variantTitle}" with price $${priceVariant.price}`);
           }
         } catch (updateError) {
           console.error(`${pfx} Failed to update variant ${existingVariant.title}:`, updateError);
@@ -306,6 +313,7 @@ export async function createShopifyProduct(
                 title
                 inventoryItem {
                   id
+                  tracked
                 }
               }
             }
@@ -337,13 +345,52 @@ export async function createShopifyProduct(
         const primaryLocation = locationResult?.data?.locations?.nodes?.[0];
         
         if (primaryLocation) {
-          console.log(`${pfx} Setting inventory at location: ${primaryLocation.name}`);
-          
-          // Set inventory quantity for each variant (default: 100 units)
-          const defaultInventory = 100;
+          console.log(`${pfx} Setting inventory at location: ${primaryLocation.name} (${primaryLocation.id})`);
           
           for (const variant of variants) {
             if (variant.inventoryItem?.id) {
+              // Generate random inventory (50-200 units)
+              const randomInventory = Math.floor(Math.random() * 151) + 50;
+              
+              // Step 3a: First, activate inventory tracking for this item at this location
+              const activateMutation = `
+                mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+                  inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+                    inventoryLevel {
+                      id
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
+                    userErrors {
+                      field
+                      message
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                // Activate inventory tracking
+                const activateRaw = await admin.graphql(activateMutation, {
+                  variables: {
+                    inventoryItemId: variant.inventoryItem.id,
+                    locationId: primaryLocation.id,
+                  },
+                });
+                const activateResult = await normalizeAdminGraphqlResult(activateRaw, pfx);
+                
+                if (activateResult?.data?.inventoryActivate?.userErrors?.length > 0) {
+                  // May already be activated, which is fine
+                  console.log(`${pfx} Inventory activation note for ${variant.title}:`, activateResult.data.inventoryActivate.userErrors);
+                }
+              } catch (activateError) {
+                // Ignore - may already be activated
+                console.log(`${pfx} Inventory activation skipped for ${variant.title} (may already be active)`);
+              }
+              
+              // Step 3b: Set the inventory quantity
               const inventoryMutation = `
                 mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
                   inventorySetOnHandQuantities(input: $input) {
@@ -366,7 +413,7 @@ export async function createShopifyProduct(
                       setQuantities: [{
                         inventoryItemId: variant.inventoryItem.id,
                         locationId: primaryLocation.id,
-                        quantity: defaultInventory,
+                        quantity: randomInventory,
                       }],
                     },
                   },
@@ -376,11 +423,13 @@ export async function createShopifyProduct(
                 if (inventoryResult?.data?.inventorySetOnHandQuantities?.userErrors?.length > 0) {
                   console.error(`${pfx} Inventory error for ${variant.title}:`, inventoryResult.data.inventorySetOnHandQuantities.userErrors);
                 } else {
-                  console.log(`${pfx} Set inventory for ${variant.title}: ${defaultInventory} units`);
+                  console.log(`${pfx} Set inventory for ${variant.title}: ${randomInventory} units`);
                 }
               } catch (invError) {
                 console.error(`${pfx} Failed to set inventory for ${variant.title}:`, invError);
               }
+            } else {
+              console.log(`${pfx} No inventoryItem for variant ${variant.title}`);
             }
           }
         } else {
