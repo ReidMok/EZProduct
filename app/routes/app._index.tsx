@@ -13,11 +13,14 @@ import {
   Banner,
   Text,
   BlockStack,
+  InlineStack,
+  ButtonGroup,
 } from "@shopify/polaris";
 import shopify from "../shopify.server";
 import { generateProduct } from "../utils/ai.generator";
 import { createShopifyProduct } from "../utils/shopify.sync";
 import { prisma } from "../db.server";
+import { t, getSavedLanguage, saveLanguage, type Language } from "../utils/i18n";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Log all requests to /app route
@@ -361,6 +364,18 @@ export default function Index() {
   const [sizeOptions, setSizeOptions] = useState("");
   const [brandName, setBrandName] = useState("");
   const [productNotes, setProductNotes] = useState("");
+  const [lang, setLang] = useState<Language>('en');
+  
+  // Initialize language from localStorage on mount
+  useEffect(() => {
+    setLang(getSavedLanguage());
+  }, []);
+  
+  // Toggle language handler
+  const toggleLanguage = (newLang: Language) => {
+    setLang(newLang);
+    saveLanguage(newLang);
+  };
 
   // Restore form data from localStorage after session refresh
   useEffect(() => {
@@ -428,19 +443,24 @@ export default function Index() {
 
   return (
     <Page
-      title="EZProduct - AI Product Generator"
-      subtitle="Generate complete product listings with AI and sync to your store"
+      title={t('pageTitle', lang)}
+      subtitle={t('pageSubtitle', lang)}
+      secondaryActions={[
+        {
+          content: lang === 'en' ? '🌐 中文' : '🌐 English',
+          onAction: () => toggleLanguage(lang === 'en' ? 'zh' : 'en'),
+        },
+      ]}
     >
       <BlockStack gap="500">
         {sessionRefreshed && !result && (
-          <Banner tone="warning" title="会话已刷新 / Session Refreshed">
-            <p>您的会话令牌已刷新。请重新点击"Generate & Sync Product"按钮生成产品。</p>
-            <p>Your session token has been refreshed. Please click the button again to generate your product.</p>
+          <Banner tone="warning" title={t('sessionRefreshedTitle', lang)}>
+            <p>{t('sessionRefreshedMessage', lang)}</p>
           </Banner>
         )}
 
         {result === "error" && message && (
-          <Banner tone="critical" title="Error">
+          <Banner tone="critical" title={t('errorTitle', lang)}>
             <p>{message}</p>
           </Banner>
         )}
@@ -448,22 +468,22 @@ export default function Index() {
         {result === "success" && (
           <Banner
             tone="success"
-            title="Success!"
+            title={t('successTitle', lang)}
             action={
               productId
                 ? {
-                    content: "View Product",
+                    content: t('viewProduct', lang),
                     url: `https://${shop}/admin/products/${productId.replace("gid://shopify/Product/", "")}`,
                     external: true,
                   }
                 : undefined
             }
           >
-            <p>{message || "Product generated and synced successfully!"}</p>
+            <p>{message || t('successMessage', lang)}</p>
           </Banner>
         )}
 
-        <LegacyCard sectioned title="Generate New Product">
+        <LegacyCard sectioned title={t('formTitle', lang)}>
           {/* Force a document POST so Shopify's exit-iframe HTML/redirect can execute properly.
               Remix fetch-navigation can treat that HTML as data and show a blank "200" view. */}
           <Form
@@ -471,7 +491,7 @@ export default function Index() {
             reloadDocument
             onSubmit={(e) => {
               setDocumentSubmitting(true);
-              console.log("[App UI] Form onSubmit triggered! (v4.0)");
+              console.log("[App UI] Form onSubmit triggered! (v5.0)");
               
               // Save form data to localStorage in case session needs refresh
               try {
@@ -496,59 +516,56 @@ export default function Index() {
 
             <BlockStack gap="400">
               <TextField
-                label="Product Keywords"
+                label={t('keywordsLabel', lang)}
                 type="text"
                 value={keywords}
-                onChange={(value) => {
-                  console.log("[App UI] Keywords changed:", value);
-                  setKeywords(value);
-                }}
-                placeholder="e.g., Ceramic Coffee Mug, Yoga Mat, Pet Collar"
-                helpText="Enter keywords describing your product. AI will generate title, description, variants, and SEO metadata."
+                onChange={(value) => setKeywords(value)}
+                placeholder={t('keywordsPlaceholder', lang)}
+                helpText={t('keywordsHelp', lang)}
                 autoComplete="off"
                 disabled={isSubmitting || documentSubmitting}
               />
 
               <TextField
-                label="Product Image URL (Optional)"
+                label={t('imageUrlLabel', lang)}
                 type="url"
                 value={imageUrl}
                 onChange={(value) => setImageUrl(value)}
-                placeholder="https://example.com/product-image.jpg"
-                helpText="可选：提供图片链接，AI 会分析图片并融入产品描述中"
+                placeholder={t('imageUrlPlaceholder', lang)}
+                helpText={t('imageUrlHelp', lang)}
                 autoComplete="off"
                 disabled={isSubmitting || documentSubmitting}
               />
 
               <TextField
-                label="Size Options / 尺寸选项 (Optional)"
+                label={t('sizeOptionsLabel', lang)}
                 type="text"
                 value={sizeOptions}
                 onChange={(value) => setSizeOptions(value)}
-                placeholder="e.g., S, M, L, XL  或  小号, 中号, 大号  或  6inch, 8inch, 10inch"
-                helpText="可选：输入产品的尺寸选项，用逗号分隔。如不填写，AI 会根据产品类型自动生成合适的尺寸"
+                placeholder={t('sizeOptionsPlaceholder', lang)}
+                helpText={t('sizeOptionsHelp', lang)}
                 autoComplete="off"
                 disabled={isSubmitting || documentSubmitting}
               />
 
               <TextField
-                label="Brand Name / 品牌名称 (Optional)"
+                label={t('brandNameLabel', lang)}
                 type="text"
                 value={brandName}
                 onChange={(value) => setBrandName(value)}
-                placeholder="e.g., ResinMemory, Handmade Studio"
-                helpText="可选：输入品牌名称，会自然地融入标题和描述中"
+                placeholder={t('brandNamePlaceholder', lang)}
+                helpText={t('brandNameHelp', lang)}
                 autoComplete="off"
                 disabled={isSubmitting || documentSubmitting}
               />
 
               <TextField
-                label="Additional Product Info / 产品补充说明 (Optional)"
+                label={t('productNotesLabel', lang)}
                 type="text"
                 value={productNotes}
                 onChange={(value) => setProductNotes(value)}
-                placeholder="e.g., 手工制作，独家设计，限量版..."
-                helpText="可选：添加关于产品的额外信息，如材质、工艺、特色等，AI 会融入产品描述"
+                placeholder={t('productNotesPlaceholder', lang)}
+                helpText={t('productNotesHelp', lang)}
                 autoComplete="off"
                 multiline={3}
                 disabled={isSubmitting || documentSubmitting}
@@ -559,44 +576,38 @@ export default function Index() {
                 variant="primary"
                 loading={isSubmitting || documentSubmitting}
                 disabled={isSubmitting || documentSubmitting}
-                onClick={() => {
-                  console.log("[App UI] Button clicked!");
-                  console.log("[App UI] Current keywords:", keywords);
-                  console.log("[App UI] Current imageUrl:", imageUrl);
-                  console.log("[App UI] isSubmitting:", isSubmitting);
-                }}
               >
-                {isSubmitting || documentSubmitting ? "Generating..." : "Generate & Sync Product"}
+                {isSubmitting || documentSubmitting ? t('submittingButton', lang) : t('submitButton', lang)}
               </Button>
             </BlockStack>
           </Form>
         </LegacyCard>
 
-        <LegacyCard sectioned title="How It Works / 使用说明">
+        <LegacyCard sectioned title={t('howItWorksTitle', lang)}>
           <BlockStack gap="300">
             <Text as="p">
-              <strong>1. 输入产品关键词:</strong> 描述你的产品（如："极简陶瓷咖啡杯"、"手工树脂摆件"）
+              <strong>{t('step1Title', lang)}</strong> {t('step1Desc', lang)}
             </Text>
             <Text as="p">
-              <strong>2. 可选设置:</strong>
-            </Text>
-            <ul>
-              <li><strong>图片链接:</strong> 提供产品图片 URL，AI 会分析并添加到产品中</li>
-              <li><strong>尺寸选项:</strong> 自定义尺寸（如 S/M/L/XL 或 小号/中号/大号），不填则 AI 智能生成</li>
-              <li><strong>品牌名称:</strong> 添加你的品牌，会融入标题和描述</li>
-              <li><strong>补充说明:</strong> 添加材质、工艺等特色信息</li>
-            </ul>
-            <Text as="p">
-              <strong>3. AI 生成:</strong> AI 会根据产品类型智能创建：
+              <strong>{t('step2Title', lang)}</strong>
             </Text>
             <ul>
-              <li>SEO 优化的标题和描述</li>
-              <li>适合产品类型的尺寸变体（服装用 S/M/L，摆件用尺寸，配饰用单一尺寸等）</li>
-              <li>合理的定价和 SKU</li>
-              <li>相关标签和 SEO 元数据</li>
+              <li><strong>•</strong> {t('step2Image', lang)}</li>
+              <li><strong>•</strong> {t('step2Size', lang)}</li>
+              <li><strong>•</strong> {t('step2Brand', lang)}</li>
+              <li><strong>•</strong> {t('step2Notes', lang)}</li>
             </ul>
             <Text as="p">
-              <strong>4. 自动同步:</strong> 产品自动创建到你的 Shopify 店铺
+              <strong>{t('step3Title', lang)}</strong> {t('step3Desc', lang)}
+            </Text>
+            <ul>
+              <li>• {t('step3Item1', lang)}</li>
+              <li>• {t('step3Item2', lang)}</li>
+              <li>• {t('step3Item3', lang)}</li>
+              <li>• {t('step3Item4', lang)}</li>
+            </ul>
+            <Text as="p">
+              <strong>{t('step4Title', lang)}</strong> {t('step4Desc', lang)}
             </Text>
           </BlockStack>
         </LegacyCard>
