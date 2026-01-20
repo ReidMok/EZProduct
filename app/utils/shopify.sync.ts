@@ -138,21 +138,19 @@ export async function createShopifyProduct(
     console.log(`${pfx} Required variants count:`, product.variants.length);
     console.log(`${pfx} Required variant sizes:`, product.variants.map(v => v.size).join(', '));
     
-    // Step 2: Create/update variants
-    // Shopify's productCreate only creates ONE default variant, not one per option value
-    // We need to create additional variants for each size using productVariantsBulkCreate
+    // Step 2: Handle variants
+    // When productOptions is set, Shopify auto-creates variants for each option value
+    // We need to update these variants with correct prices
     
-    if (product.variants.length > 1) {
-      // Need to create additional variants (skip first one if it matches existing)
-      const existingVariantId = existingVariants[0]?.id;
-      const existingVariantTitle = existingVariants[0]?.title || "";
+    if (existingVariants.length >= product.variants.length) {
+      // Shopify created variants for each option value - just update prices
+      console.log(`${pfx} Step 2: Updating ${existingVariants.length} auto-created variants with prices...`);
       
-      // First, update the existing default variant with the first size's price
-      if (existingVariantId) {
-        console.log(`${pfx} Step 2a: Updating default variant with first size price...`);
-        const firstVariant = product.variants[0];
+      for (let i = 0; i < existingVariants.length && i < product.variants.length; i++) {
+        const existingVariant = existingVariants[i];
+        const ourVariant = product.variants[i];
         
-        const updateDefaultMutation = `
+        const updateMutation = `
           mutation productVariantUpdate($input: ProductVariantInput!) {
             productVariantUpdate(input: $input) {
               productVariant { id title price }
@@ -162,7 +160,115 @@ export async function createShopifyProduct(
         `;
         
         try {
-          const updateRaw = await admin.graphql(updateDefaultMutation, {
+          const updateRaw = await admin.graphql(updateMutation, {
+            variables: {
+              input: {
+                id: existingVariant.id,
+                price: ourVariant.price.toString(),
+                compareAtPrice: ourVariant.compareAtPrice > 0 ? ourVariant.compareAtPrice.toString() : undefined,
+              }
+            },
+          });
+          const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
+          if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
+            console.error(`${pfx} Variant update error for ${existingVariant.title}:`, updateResult.data.productVariantUpdate.userErrors);
+          } else {
+            console.log(`${pfx} Updated variant ${existingVariant.title} with price $${ourVariant.price}`);
+          }
+        } catch (updateError) {
+          console.error(`${pfx} Failed to update variant ${existingVariant.title}:`, updateError);
+        }
+      }
+    } else if (existingVariants.length === 1 && product.variants.length > 1) {
+      // Only one default variant exists, but we need multiple
+      // First delete the default variant, then create all variants fresh
+      console.log(`${pfx} Step 2: Replacing default variant with ${product.variants.length} variants...`);
+      
+      const defaultVariantId = existingVariants[0].id;
+      
+      // Create all variants first (Shopify requires at least one variant)
+      const createVariantsMutation = `
+        mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy) {
+          productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy) {
+            productVariants { id title price }
+            userErrors { field message }
+          }
+        }
+      `;
+      
+      const variantsInput = product.variants.map((variant: ProductVariant) => ({
+        optionValues: [{ optionName: "Size", name: variant.size }],
+        price: variant.price.toString(),
+        compareAtPrice: variant.compareAtPrice > 0 ? variant.compareAtPrice.toString() : undefined,
+      }));
+      
+      console.log(`${pfx} Creating ${variantsInput.length} variants...`);
+      
+      try {
+        const createRaw = await admin.graphql(createVariantsMutation, {
+          variables: { 
+            productId, 
+            variants: variantsInput,
+            strategy: "REMOVE_STANDALONE_VARIANT" // This removes the default "Default Title" variant
+          },
+        });
+        const createResult = await normalizeAdminGraphqlResult(createRaw, pfx);
+        
+        if (createResult?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
+          const errors = createResult.data.productVariantsBulkCreate.userErrors;
+          console.error(`${pfx} Variant creation errors:`, JSON.stringify(errors, null, 2));
+          
+          // If strategy failed, try without it and manually delete default variant after
+          console.log(`${pfx} Retrying without strategy...`);
+          const retryRaw = await admin.graphql(createVariantsMutation.replace(', $strategy: ProductVariantsBulkCreateStrategy', '').replace(', strategy: $strategy', ''), {
+            variables: { productId, variants: variantsInput },
+          });
+          const retryResult = await normalizeAdminGraphqlResult(retryRaw, pfx);
+          
+          if (retryResult?.data?.productVariantsBulkCreate?.productVariants?.length > 0) {
+            console.log(`${pfx} Successfully created ${retryResult.data.productVariantsBulkCreate.productVariants.length} variants`);
+            
+            // Now delete the original default variant
+            try {
+              const deleteMutation = `
+                mutation productVariantDelete($id: ID!) {
+                  productVariantDelete(id: $id) {
+                    deletedProductVariantId
+                    userErrors { field message }
+                  }
+                }
+              `;
+              await admin.graphql(deleteMutation, { variables: { id: defaultVariantId } });
+              console.log(`${pfx} Deleted default variant`);
+            } catch (deleteError) {
+              console.error(`${pfx} Could not delete default variant:`, deleteError);
+            }
+          }
+        } else {
+          const createdVariants = createResult?.data?.productVariantsBulkCreate?.productVariants || [];
+          console.log(`${pfx} Successfully created ${createdVariants.length} variants`);
+        }
+      } catch (createError) {
+        console.error(`${pfx} Failed to create variants:`, createError);
+      }
+    } else {
+      // Single variant case - just update the price
+      console.log(`${pfx} Step 2: Updating single variant price...`);
+      const firstVariant = product.variants[0];
+      const existingVariantId = existingVariants[0]?.id;
+      
+      if (existingVariantId) {
+        const updateMutation = `
+          mutation productVariantUpdate($input: ProductVariantInput!) {
+            productVariantUpdate(input: $input) {
+              productVariant { id title price }
+              userErrors { field message }
+            }
+          }
+        `;
+        
+        try {
+          const updateRaw = await admin.graphql(updateMutation, {
             variables: {
               input: {
                 id: existingVariantId,
@@ -173,88 +279,13 @@ export async function createShopifyProduct(
           });
           const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
           if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
-            console.error(`${pfx} Default variant update errors:`, updateResult.data.productVariantUpdate.userErrors);
+            console.error(`${pfx} Variant update errors:`, updateResult.data.productVariantUpdate.userErrors);
           } else {
-            console.log(`${pfx} Default variant updated successfully`);
+            console.log(`${pfx} Variant price updated successfully`);
           }
         } catch (updateError) {
-          console.error(`${pfx} Failed to update default variant:`, updateError);
+          console.error(`${pfx} Failed to update variant price:`, updateError);
         }
-      }
-      
-      // Then create the additional variants (all variants except the first one)
-      const additionalVariants = product.variants.slice(1);
-      if (additionalVariants.length > 0) {
-        console.log(`${pfx} Step 2b: Creating ${additionalVariants.length} additional variants...`);
-        
-        const createVariantsMutation = `
-          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkCreate(productId: $productId, variants: $variants) {
-              productVariants { id title price }
-              userErrors { field message }
-            }
-          }
-        `;
-        
-        const variantsInput = additionalVariants.map((variant: ProductVariant) => ({
-          optionValues: [{ optionName: "Size", name: variant.size }],
-          price: variant.price.toString(),
-          compareAtPrice: variant.compareAtPrice > 0 ? variant.compareAtPrice.toString() : undefined,
-        }));
-        
-        console.log(`${pfx} Creating variants with input:`, JSON.stringify(variantsInput, null, 2));
-        
-        try {
-          const createRaw = await admin.graphql(createVariantsMutation, {
-            variables: { productId, variants: variantsInput },
-          });
-          const createResult = await normalizeAdminGraphqlResult(createRaw, pfx);
-          
-          if (createResult?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
-            const errors = createResult.data.productVariantsBulkCreate.userErrors;
-            console.error(`${pfx} Variant creation errors:`, JSON.stringify(errors, null, 2));
-            // Log but don't fail - at least we have the default variant
-          } else {
-            const createdVariants = createResult?.data?.productVariantsBulkCreate?.productVariants || [];
-            console.log(`${pfx} Successfully created ${createdVariants.length} additional variants`);
-          }
-        } catch (createError) {
-          console.error(`${pfx} Failed to create additional variants:`, createError);
-        }
-      }
-    } else if (existingVariants.length > 0) {
-      // Only one variant needed, just update the price of the existing one
-      console.log(`${pfx} Step 2: Updating single variant price...`);
-      const firstVariant = product.variants[0];
-      const existingVariantId = existingVariants[0].id;
-      
-      const updateMutation = `
-        mutation productVariantUpdate($input: ProductVariantInput!) {
-          productVariantUpdate(input: $input) {
-            productVariant { id title price }
-            userErrors { field message }
-          }
-        }
-      `;
-      
-      try {
-        const updateRaw = await admin.graphql(updateMutation, {
-          variables: {
-            input: {
-              id: existingVariantId,
-              price: firstVariant.price.toString(),
-              compareAtPrice: firstVariant.compareAtPrice > 0 ? firstVariant.compareAtPrice.toString() : undefined,
-            }
-          },
-        });
-        const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
-        if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
-          console.error(`${pfx} Variant update errors:`, updateResult.data.productVariantUpdate.userErrors);
-        } else {
-          console.log(`${pfx} Variant price updated successfully`);
-        }
-      } catch (updateError) {
-        console.error(`${pfx} Failed to update variant price:`, updateError);
       }
     }
 
