@@ -99,7 +99,7 @@ export default function Privacy() {
           If you have any questions about this privacy policy, please contact us at:
         </p>
         <p>
-          Email: <a href="mailto:support@ezproduct.app" style={{ color: "#0066cc" }}>support@ezproduct.app</a>
+          Email: <a href="mailto:reidmok@gmail.com" style={{ color: "#0066cc" }}>reidmok@gmail.com</a>
         </p>
         <p>
           Or through the Shopify App support channels.
