@@ -386,9 +386,50 @@ export async function createShopifyProduct(
             // Generate random inventory (50-200 units)
             const randomInventory = Math.floor(Math.random() * 151) + 50;
             
-            console.log(`${pfx} Processing inventory for ${variant.title} (item: ${inventoryItemId})...`);
+            console.log(`${pfx} Processing inventory for ${variant.title} (item: ${inventoryItemId}, tracked: ${variant.inventoryItem.tracked})...`);
             
-            // Step 3a: First, activate inventory tracking for this item at this location
+            // Step 3a-1: First, enable inventory tracking for this item via inventoryItemUpdate
+            if (!variant.inventoryItem.tracked) {
+              const enableTrackingMutation = `
+                mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+                  inventoryItemUpdate(id: $id, input: $input) {
+                    inventoryItem {
+                      id
+                      tracked
+                    }
+                    userErrors {
+                      field
+                      message
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const trackingRaw = await admin.graphql(enableTrackingMutation, {
+                  variables: {
+                    id: inventoryItemId,
+                    input: {
+                      tracked: true,
+                    },
+                  },
+                });
+                const trackingResult = await normalizeAdminGraphqlResult(trackingRaw, pfx);
+                
+                if (trackingResult?.data?.inventoryItemUpdate?.userErrors?.length > 0) {
+                  console.error(`${pfx} Failed to enable tracking for ${variant.title}:`, trackingResult.data.inventoryItemUpdate.userErrors);
+                } else {
+                  console.log(`${pfx} ✅ Enabled inventory tracking for ${variant.title}`);
+                }
+              } catch (trackingError) {
+                console.error(`${pfx} Error enabling inventory tracking for ${variant.title}:`, trackingError);
+              }
+              
+              // Small delay after enabling tracking
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            
+            // Step 3a-2: Activate inventory at this location
             const activateMutation = `
               mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
                 inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
@@ -444,10 +485,11 @@ export async function createShopifyProduct(
               }
             }
             
-            // Step 3b: Set the inventory quantity (only if activation succeeded or was already active)
-            if (activationSuccess) {
-              // Delay to ensure activation is fully processed by Shopify
-              await new Promise(resolve => setTimeout(resolve, 1000));
+            // Step 3b: Set the inventory quantity
+            // Always try to set quantity - the activation step may have failed but tracking is enabled
+            {
+              // Delay to ensure any previous operations are fully processed by Shopify
+              await new Promise(resolve => setTimeout(resolve, 500));
               
               const inventoryMutation = `
                 mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
@@ -487,8 +529,6 @@ export async function createShopifyProduct(
               } catch (invError) {
                 console.error(`${pfx} Failed to set inventory quantity for ${variant.title}:`, invError);
               }
-            } else {
-              console.warn(`${pfx} Skipping quantity set for ${variant.title} - activation failed`);
             }
           }
         } else {
@@ -549,14 +589,14 @@ export async function createShopifyProduct(
       }
     }
 
-    // Step 5: Publish product to Online Store
+    // Step 5: Publish product to all sales channels
     try {
-      console.log(`${pfx} Step 5: Publishing product to Online Store...`);
+      console.log(`${pfx} Step 5: Publishing product to sales channels...`);
       
-      // First, get the Online Store publication
+      // Get all publications (sales channels)
       const publicationsQuery = `
         query {
-          publications(first: 10) {
+          publications(first: 20) {
             nodes {
               id
               name
@@ -569,17 +609,10 @@ export async function createShopifyProduct(
       const publicationsResult = await normalizeAdminGraphqlResult(publicationsRaw, pfx);
       const publications = publicationsResult?.data?.publications?.nodes || [];
       
-      // Find Online Store publication
-      const onlineStorePub = publications.find((pub: any) => 
-        pub.name?.toLowerCase().includes('online store') ||
-        pub.name?.toLowerCase().includes('在线商店') ||
-        pub.name === 'Online Store'
-      ) || publications.find((pub: any) => pub.name?.toLowerCase().includes('online'));
+      console.log(`${pfx} Found ${publications.length} publications:`, publications.map((p: any) => p.name).join(', '));
       
-      if (onlineStorePub) {
-        console.log(`${pfx} Found publication: ${onlineStorePub.name} (${onlineStorePub.id})`);
-        
-        // Publish product to this publication
+      if (publications.length > 0) {
+        // Publish to ALL publications at once
         const publishMutation = `
           mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
             publishablePublish(id: $id, input: $input) {
@@ -597,13 +630,16 @@ export async function createShopifyProduct(
           }
         `;
         
+        // Build input for all publications
+        const publicationInputs = publications.map((pub: any) => ({
+          publicationId: pub.id,
+        }));
+        
         try {
           const publishRaw = await admin.graphql(publishMutation, {
             variables: {
               id: productId,
-              input: [{
-                publicationId: onlineStorePub.id,
-              }],
+              input: publicationInputs,
             },
           });
           const publishResult = await normalizeAdminGraphqlResult(publishRaw, pfx);
@@ -611,20 +647,39 @@ export async function createShopifyProduct(
           if (publishResult?.data?.publishablePublish?.userErrors?.length > 0) {
             const errors = publishResult.data.publishablePublish.userErrors;
             console.error(`${pfx} Publication errors:`, errors);
+            
+            // Try publishing one by one if batch fails
+            console.log(`${pfx} Trying to publish to each channel individually...`);
+            for (const pub of publications) {
+              try {
+                const singlePublishRaw = await admin.graphql(publishMutation, {
+                  variables: {
+                    id: productId,
+                    input: [{ publicationId: pub.id }],
+                  },
+                });
+                const singleResult = await normalizeAdminGraphqlResult(singlePublishRaw, pfx);
+                if (singleResult?.data?.publishablePublish?.userErrors?.length === 0) {
+                  console.log(`${pfx} ✅ Published to ${pub.name}`);
+                }
+              } catch (e) {
+                console.log(`${pfx} Could not publish to ${pub.name}`);
+              }
+            }
           } else {
-            console.log(`${pfx} ✅ Successfully published product to ${onlineStorePub.name}`);
+            console.log(`${pfx} ✅ Successfully published product to ${publications.length} channels`);
           }
         } catch (publishError) {
           console.error(`${pfx} Failed to publish product:`, publishError);
-          // Don't fail - product was created successfully
         }
       } else {
-        console.log(`${pfx} Online Store publication not found (checked ${publications.length} publications)`);
-        // Try alternative: use productPublishToCurrentChannel
+        console.log(`${pfx} No publications found, trying productPublish mutation...`);
+        
+        // Alternative: use productPublish mutation
         try {
-          const altPublishMutation = `
-            mutation productPublishToCurrentChannel($id: ID!) {
-              productPublishToCurrentChannel(id: $id) {
+          const productPublishMutation = `
+            mutation productPublish($input: ProductPublishInput!) {
+              productPublish(input: $input) {
                 product {
                   id
                   publishedAt
@@ -637,15 +692,20 @@ export async function createShopifyProduct(
             }
           `;
           
-          const altPublishRaw = await admin.graphql(altPublishMutation, {
-            variables: { id: productId },
+          const productPublishRaw = await admin.graphql(productPublishMutation, {
+            variables: {
+              input: {
+                id: productId,
+                productPublications: [{ publicationId: "gid://shopify/Publication/1" }], // Default publication
+              },
+            },
           });
-          const altPublishResult = await normalizeAdminGraphqlResult(altPublishRaw, pfx);
+          const productPublishResult = await normalizeAdminGraphqlResult(productPublishRaw, pfx);
           
-          if (altPublishResult?.data?.productPublishToCurrentChannel?.userErrors?.length > 0) {
-            console.error(`${pfx} Alternative publication errors:`, altPublishResult.data.productPublishToCurrentChannel.userErrors);
+          if (productPublishResult?.data?.productPublish?.userErrors?.length > 0) {
+            console.error(`${pfx} productPublish errors:`, productPublishResult.data.productPublish.userErrors);
           } else {
-            console.log(`${pfx} ✅ Successfully published product using productPublishToCurrentChannel`);
+            console.log(`${pfx} ✅ Successfully published product using productPublish`);
           }
         } catch (altPublishError) {
           console.error(`${pfx} Alternative publication also failed:`, altPublishError);
