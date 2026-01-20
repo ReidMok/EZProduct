@@ -173,6 +173,7 @@ export async function createShopifyProduct(
                 id: existingVariant.id,
                 price: priceVariant.price.toString(),
                 compareAtPrice: priceVariant.compareAtPrice > 0 ? priceVariant.compareAtPrice.toString() : undefined,
+                inventoryPolicy: "CONTINUE", // Track inventory for this variant
               }
             },
           });
@@ -281,6 +282,7 @@ export async function createShopifyProduct(
                 id: existingVariantId,
                 price: firstVariant.price.toString(),
                 compareAtPrice: firstVariant.compareAtPrice > 0 ? firstVariant.compareAtPrice.toString() : undefined,
+                inventoryPolicy: "CONTINUE", // Track inventory for this variant
               }
             },
           });
@@ -297,6 +299,26 @@ export async function createShopifyProduct(
     }
 
     console.log(`${pfx} Product and variants created/updated successfully!`);
+
+    // Step 2.5: Enable inventory tracking at product level
+    try {
+      console.log(`${pfx} Step 2.5: Enabling inventory tracking at product level...`);
+      
+      const updateProductMutation = `
+        mutation productUpdate($input: ProductInput!) {
+          productUpdate(input: $input) {
+            product { id tracksInventory }
+            userErrors { field message }
+          }
+        }
+      `;
+      
+      // Try to enable inventory tracking - but this might not be supported in ProductInput
+      // Instead, we'll enable it at variant level via inventoryActivate
+      console.log(`${pfx} Product-level inventory tracking will be enabled via variant activation`);
+    } catch (e) {
+      // Ignore - we'll handle at variant level
+    }
 
     // Step 3: Set inventory quantities
     // Get all variants with their inventory items, then set quantities
@@ -328,13 +350,15 @@ export async function createShopifyProduct(
       const variants = productResult?.data?.product?.variants?.nodes || [];
       
       if (variants.length > 0) {
-        // Get the shop's primary location
+        // Get all locations (prioritize SHOP type locations)
         const locationQuery = `
           query {
-            locations(first: 1) {
+            locations(first: 10) {
               nodes {
                 id
                 name
+                locationType
+                isActive
               }
             }
           }
@@ -342,55 +366,89 @@ export async function createShopifyProduct(
         
         const locationRaw = await admin.graphql(locationQuery);
         const locationResult = await normalizeAdminGraphqlResult(locationRaw, pfx);
-        const primaryLocation = locationResult?.data?.locations?.nodes?.[0];
+        const allLocations = locationResult?.data?.locations?.nodes || [];
         
-        if (primaryLocation) {
-          console.log(`${pfx} Setting inventory at location: ${primaryLocation.name} (${primaryLocation.id})`);
+        // Find shop location (locationType: SHOP) or use first active location
+        const shopLocation = allLocations.find((loc: any) => 
+          loc.locationType === "SHOP" && loc.isActive
+        ) || allLocations.find((loc: any) => loc.isActive) || allLocations[0];
+        
+        if (shopLocation) {
+          console.log(`${pfx} Setting inventory at location: ${shopLocation.name} (${shopLocation.id}, type: ${shopLocation.locationType || 'unknown'})`);
           
           for (const variant of variants) {
-            if (variant.inventoryItem?.id) {
-              // Generate random inventory (50-200 units)
-              const randomInventory = Math.floor(Math.random() * 151) + 50;
-              
-              // Step 3a: First, activate inventory tracking for this item at this location
-              const activateMutation = `
-                mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
-                  inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
-                    inventoryLevel {
-                      id
-                      quantities(names: ["available"]) {
-                        name
-                        quantity
-                      }
-                    }
-                    userErrors {
-                      field
-                      message
+            if (!variant.inventoryItem?.id) {
+              console.log(`${pfx} No inventoryItem for variant ${variant.title}, skipping`);
+              continue;
+            }
+            
+            const inventoryItemId = variant.inventoryItem.id;
+            // Generate random inventory (50-200 units)
+            const randomInventory = Math.floor(Math.random() * 151) + 50;
+            
+            console.log(`${pfx} Processing inventory for ${variant.title} (item: ${inventoryItemId})...`);
+            
+            // Step 3a: First, activate inventory tracking for this item at this location
+            const activateMutation = `
+              mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+                inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+                  inventoryLevel {
+                    id
+                    quantities(names: ["available"]) {
+                      name
+                      quantity
                     }
                   }
+                  userErrors {
+                    field
+                    message
+                  }
                 }
-              `;
-              
-              try {
-                // Activate inventory tracking
-                const activateRaw = await admin.graphql(activateMutation, {
-                  variables: {
-                    inventoryItemId: variant.inventoryItem.id,
-                    locationId: primaryLocation.id,
-                  },
-                });
-                const activateResult = await normalizeAdminGraphqlResult(activateRaw, pfx);
-                
-                if (activateResult?.data?.inventoryActivate?.userErrors?.length > 0) {
-                  // May already be activated, which is fine
-                  console.log(`${pfx} Inventory activation note for ${variant.title}:`, activateResult.data.inventoryActivate.userErrors);
-                }
-              } catch (activateError) {
-                // Ignore - may already be activated
-                console.log(`${pfx} Inventory activation skipped for ${variant.title} (may already be active)`);
               }
+            `;
+            
+            let activationSuccess = false;
+            try {
+              const activateRaw = await admin.graphql(activateMutation, {
+                variables: {
+                  inventoryItemId,
+                  locationId: shopLocation.id,
+                },
+              });
+              const activateResult = await normalizeAdminGraphqlResult(activateRaw, pfx);
               
-              // Step 3b: Set the inventory quantity
+              if (activateResult?.data?.inventoryActivate?.userErrors?.length > 0) {
+                const errors = activateResult.data.inventoryActivate.userErrors;
+                // Check if error is because already activated
+                const isAlreadyActive = errors.some((e: any) => 
+                  e.message?.toLowerCase().includes('already') ||
+                  e.message?.toLowerCase().includes('activated')
+                );
+                if (isAlreadyActive) {
+                  console.log(`${pfx} Inventory already activated for ${variant.title}`);
+                  activationSuccess = true;
+                } else {
+                  console.error(`${pfx} Inventory activation error for ${variant.title}:`, errors);
+                }
+              } else if (activateResult?.data?.inventoryActivate?.inventoryLevel) {
+                activationSuccess = true;
+                console.log(`${pfx} Successfully activated inventory for ${variant.title}`);
+              }
+            } catch (activateError: any) {
+              const errorMsg = activateError?.message || String(activateError);
+              if (errorMsg.includes('already') || errorMsg.includes('activated')) {
+                console.log(`${pfx} Inventory already activated for ${variant.title}`);
+                activationSuccess = true;
+              } else {
+                console.error(`${pfx} Failed to activate inventory for ${variant.title}:`, activateError);
+              }
+            }
+            
+            // Step 3b: Set the inventory quantity (only if activation succeeded or was already active)
+            if (activationSuccess) {
+              // Delay to ensure activation is fully processed by Shopify
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
               const inventoryMutation = `
                 mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
                   inventorySetOnHandQuantities(input: $input) {
@@ -411,8 +469,8 @@ export async function createShopifyProduct(
                     input: {
                       reason: "correction",
                       setQuantities: [{
-                        inventoryItemId: variant.inventoryItem.id,
-                        locationId: primaryLocation.id,
+                        inventoryItemId,
+                        locationId: shopLocation.id,
                         quantity: randomInventory,
                       }],
                     },
@@ -421,19 +479,20 @@ export async function createShopifyProduct(
                 const inventoryResult = await normalizeAdminGraphqlResult(inventoryRaw, pfx);
                 
                 if (inventoryResult?.data?.inventorySetOnHandQuantities?.userErrors?.length > 0) {
-                  console.error(`${pfx} Inventory error for ${variant.title}:`, inventoryResult.data.inventorySetOnHandQuantities.userErrors);
+                  const errors = inventoryResult.data.inventorySetOnHandQuantities.userErrors;
+                  console.error(`${pfx} Inventory quantity error for ${variant.title}:`, errors);
                 } else {
-                  console.log(`${pfx} Set inventory for ${variant.title}: ${randomInventory} units`);
+                  console.log(`${pfx} ✅ Successfully set inventory for ${variant.title}: ${randomInventory} units at ${shopLocation.name}`);
                 }
               } catch (invError) {
-                console.error(`${pfx} Failed to set inventory for ${variant.title}:`, invError);
+                console.error(`${pfx} Failed to set inventory quantity for ${variant.title}:`, invError);
               }
             } else {
-              console.log(`${pfx} No inventoryItem for variant ${variant.title}`);
+              console.warn(`${pfx} Skipping quantity set for ${variant.title} - activation failed`);
             }
           }
         } else {
-          console.log(`${pfx} No location found, skipping inventory setup`);
+          console.log(`${pfx} No location found (checked ${allLocations.length} locations), skipping inventory setup`);
         }
       }
     } catch (inventoryError) {
