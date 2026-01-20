@@ -30,7 +30,7 @@ export const translations = {
     
     // Keywords field
     keywordsLabel: "Product Keywords",
-    keywordsPlaceholder: "e.g., Ceramic Coffee Mug, Yoga Mat, Pet Collar",
+    keywordsPlaceholder: "e.g., Yoga Mat, Pet Collar, Coffee Mug",
     keywordsHelp: "Enter keywords describing your product. AI will generate title, description, variants, and SEO metadata.",
     keywordsRequired: "Please enter product keywords",
     
@@ -61,7 +61,7 @@ export const translations = {
     // How it works section
     howItWorksTitle: "How It Works",
     step1Title: "1. Enter Keywords:",
-    step1Desc: "Describe your product (e.g., \"Minimalist Ceramic Mug\", \"Handmade Resin Figurine\")",
+    step1Desc: "Describe your product (e.g., \"Yoga Mat\", \"Pet Collar\", \"Coffee Mug\")",
     step2Title: "2. Optional Settings:",
     step2Image: "Image URL: Provide product image URL, AI will analyze and add to product",
     step2Size: "Size Options: Custom sizes (e.g., S/M/L/XL), or let AI generate automatically",
@@ -100,7 +100,7 @@ export const translations = {
     
     // Keywords field
     keywordsLabel: "产品关键词",
-    keywordsPlaceholder: "例如：陶瓷咖啡杯、瑜伽垫、宠物项圈",
+    keywordsPlaceholder: "例如：瑜伽垫、宠物项圈、咖啡杯",
     keywordsHelp: "输入描述产品的关键词。AI 将生成标题、描述、变体和 SEO 元数据。",
     keywordsRequired: "请输入产品关键词",
     
@@ -131,7 +131,7 @@ export const translations = {
     // How it works section
     howItWorksTitle: "使用说明",
     step1Title: "1. 输入产品关键词：",
-    step1Desc: '描述你的产品（如："极简陶瓷咖啡杯"、"手工树脂摆件"）',
+    step1Desc: '描述你的产品（如："瑜伽垫"、"宠物项圈"、"咖啡杯"）',
     step2Title: "2. 可选设置：",
     step2Image: "图片链接：提供产品图片 URL，AI 会分析并添加到产品中",
     step2Size: "尺寸选项：自定义尺寸（如 S/M/L/XL），不填则 AI 智能生成",
