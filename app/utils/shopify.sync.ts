@@ -132,33 +132,106 @@ export async function createShopifyProduct(
     }
     const productId = createdProduct.id as string;
 
-    // Check if variants were auto-created by productCreate (when productOptions.values was passed)
+    // Check existing variants created by productCreate
     const existingVariants = createdProduct.variants?.nodes || createdProduct.variants || [];
     console.log(`${pfx} Product created. Existing variants count:`, existingVariants.length);
+    console.log(`${pfx} Required variants count:`, product.variants.length);
+    console.log(`${pfx} Required variant sizes:`, product.variants.map(v => v.size).join(', '));
     
-    if (existingVariants.length > 0) {
-      // Step 2a: Update existing variants with prices using productVariantsBulkUpdate
-      console.log(`${pfx} Step 2: Updating ${existingVariants.length} existing variants with prices...`);
+    // Step 2: Create/update variants
+    // Shopify's productCreate only creates ONE default variant, not one per option value
+    // We need to create additional variants for each size using productVariantsBulkCreate
+    
+    if (product.variants.length > 1) {
+      // Need to create additional variants (skip first one if it matches existing)
+      const existingVariantId = existingVariants[0]?.id;
+      const existingVariantTitle = existingVariants[0]?.title || "";
       
-      // Map our variant data to existing variant IDs by matching size
-      const variantUpdates = existingVariants.map((existingVariant: any) => {
-        // Extract size from variant title (e.g., "6inch" from title "Product / 6inch")
-        const variantTitle = existingVariant.title || "";
-        const matchingVariant = product.variants.find((v) => variantTitle.includes(v.size));
+      // First, update the existing default variant with the first size's price
+      if (existingVariantId) {
+        console.log(`${pfx} Step 2a: Updating default variant with first size price...`);
+        const firstVariant = product.variants[0];
         
-        return {
-          id: existingVariant.id,
-          price: matchingVariant ? matchingVariant.price.toString() : product.variants[0]?.price.toString() || "19.99",
-          compareAtPrice: matchingVariant && matchingVariant.compareAtPrice > 0 
-            ? matchingVariant.compareAtPrice.toString() 
-            : undefined,
-        };
-      });
-
+        const updateDefaultMutation = `
+          mutation productVariantUpdate($input: ProductVariantInput!) {
+            productVariantUpdate(input: $input) {
+              productVariant { id title price }
+              userErrors { field message }
+            }
+          }
+        `;
+        
+        try {
+          const updateRaw = await admin.graphql(updateDefaultMutation, {
+            variables: {
+              input: {
+                id: existingVariantId,
+                price: firstVariant.price.toString(),
+                compareAtPrice: firstVariant.compareAtPrice > 0 ? firstVariant.compareAtPrice.toString() : undefined,
+              }
+            },
+          });
+          const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
+          if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
+            console.error(`${pfx} Default variant update errors:`, updateResult.data.productVariantUpdate.userErrors);
+          } else {
+            console.log(`${pfx} Default variant updated successfully`);
+          }
+        } catch (updateError) {
+          console.error(`${pfx} Failed to update default variant:`, updateError);
+        }
+      }
+      
+      // Then create the additional variants (all variants except the first one)
+      const additionalVariants = product.variants.slice(1);
+      if (additionalVariants.length > 0) {
+        console.log(`${pfx} Step 2b: Creating ${additionalVariants.length} additional variants...`);
+        
+        const createVariantsMutation = `
+          mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkCreate(productId: $productId, variants: $variants) {
+              productVariants { id title price }
+              userErrors { field message }
+            }
+          }
+        `;
+        
+        const variantsInput = additionalVariants.map((variant: ProductVariant) => ({
+          optionValues: [{ optionName: "Size", name: variant.size }],
+          price: variant.price.toString(),
+          compareAtPrice: variant.compareAtPrice > 0 ? variant.compareAtPrice.toString() : undefined,
+        }));
+        
+        console.log(`${pfx} Creating variants with input:`, JSON.stringify(variantsInput, null, 2));
+        
+        try {
+          const createRaw = await admin.graphql(createVariantsMutation, {
+            variables: { productId, variants: variantsInput },
+          });
+          const createResult = await normalizeAdminGraphqlResult(createRaw, pfx);
+          
+          if (createResult?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
+            const errors = createResult.data.productVariantsBulkCreate.userErrors;
+            console.error(`${pfx} Variant creation errors:`, JSON.stringify(errors, null, 2));
+            // Log but don't fail - at least we have the default variant
+          } else {
+            const createdVariants = createResult?.data?.productVariantsBulkCreate?.productVariants || [];
+            console.log(`${pfx} Successfully created ${createdVariants.length} additional variants`);
+          }
+        } catch (createError) {
+          console.error(`${pfx} Failed to create additional variants:`, createError);
+        }
+      }
+    } else if (existingVariants.length > 0) {
+      // Only one variant needed, just update the price of the existing one
+      console.log(`${pfx} Step 2: Updating single variant price...`);
+      const firstVariant = product.variants[0];
+      const existingVariantId = existingVariants[0].id;
+      
       const updateMutation = `
-        mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id title price }
+        mutation productVariantUpdate($input: ProductVariantInput!) {
+          productVariantUpdate(input: $input) {
+            productVariant { id title price }
             userErrors { field message }
           }
         }
@@ -166,56 +239,131 @@ export async function createShopifyProduct(
       
       try {
         const updateRaw = await admin.graphql(updateMutation, {
-          variables: { productId, variants: variantUpdates },
+          variables: {
+            input: {
+              id: existingVariantId,
+              price: firstVariant.price.toString(),
+              compareAtPrice: firstVariant.compareAtPrice > 0 ? firstVariant.compareAtPrice.toString() : undefined,
+            }
+          },
         });
         const updateResult = await normalizeAdminGraphqlResult(updateRaw, pfx);
-        
-        if (updateResult?.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
-          const errors = updateResult.data.productVariantsBulkUpdate.userErrors;
-          console.error(`${pfx} Variant update errors:`, JSON.stringify(errors, null, 2));
-          // Don't fail - product was created successfully, just prices weren't updated
+        if (updateResult?.data?.productVariantUpdate?.userErrors?.length > 0) {
+          console.error(`${pfx} Variant update errors:`, updateResult.data.productVariantUpdate.userErrors);
         } else {
-          console.log(`${pfx} Variants updated with prices successfully!`);
+          console.log(`${pfx} Variant price updated successfully`);
         }
       } catch (updateError) {
-        console.error(`${pfx} Failed to update variant prices:`, updateError);
-        // Don't fail - product was created successfully
-      }
-    } else {
-      // Step 2b: No variants exist, create them using productVariantsBulkCreate
-      const variantsCandidates: Array<{ name: string; mutation: string; variables: any }> = [
-        {
-          name: "productVariantsBulkCreate(ProductVariantsBulkInput + optionName/name)",
-          mutation: `
-            mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-              productVariantsBulkCreate(productId: $productId, variants: $variants) {
-                productVariants { id title price }
-                userErrors { field message }
-              }
-            }
-          `,
-          variables: {
-            productId,
-            variants: buildVariantsBulkInput(product.variants, "optionName_name"),
-          },
-        },
-      ];
-
-      console.log(`${pfx} Step 2: Creating variants...`);
-      const variantsResult = await runGraphqlWithCandidates(admin, variantsCandidates, pfx);
-      const variantsData = variantsResult as any;
-      if (variantsData?.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
-        const errors = variantsData.data.productVariantsBulkCreate.userErrors;
-        const errorMessages = errors.map((e: any) => `${e.field ? `[${e.field}] ` : ""}${e.message}`).join("; ");
-        throw new Error(`Shopify API user errors (variants): ${errorMessages}`);
+        console.error(`${pfx} Failed to update variant price:`, updateError);
       }
     }
 
     console.log(`${pfx} Product and variants created/updated successfully!`);
 
-    // Step 3: Add images if provided
+    // Step 3: Set inventory quantities
+    // Get all variants with their inventory items, then set quantities
+    try {
+      console.log(`${pfx} Step 3: Setting inventory quantities...`);
+      
+      // First, get the product with all variants and inventory items
+      const productQuery = `
+        query getProductVariants($productId: ID!) {
+          product(id: $productId) {
+            variants(first: 10) {
+              nodes {
+                id
+                title
+                inventoryItem {
+                  id
+                }
+              }
+            }
+          }
+        }
+      `;
+      
+      const productRaw = await admin.graphql(productQuery, {
+        variables: { productId },
+      });
+      const productResult = await normalizeAdminGraphqlResult(productRaw, pfx);
+      const variants = productResult?.data?.product?.variants?.nodes || [];
+      
+      if (variants.length > 0) {
+        // Get the shop's primary location
+        const locationQuery = `
+          query {
+            locations(first: 1) {
+              nodes {
+                id
+                name
+              }
+            }
+          }
+        `;
+        
+        const locationRaw = await admin.graphql(locationQuery);
+        const locationResult = await normalizeAdminGraphqlResult(locationRaw, pfx);
+        const primaryLocation = locationResult?.data?.locations?.nodes?.[0];
+        
+        if (primaryLocation) {
+          console.log(`${pfx} Setting inventory at location: ${primaryLocation.name}`);
+          
+          // Set inventory quantity for each variant (default: 100 units)
+          const defaultInventory = 100;
+          
+          for (const variant of variants) {
+            if (variant.inventoryItem?.id) {
+              const inventoryMutation = `
+                mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+                  inventorySetOnHandQuantities(input: $input) {
+                    inventoryAdjustmentGroup {
+                      reason
+                    }
+                    userErrors {
+                      field
+                      message
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const inventoryRaw = await admin.graphql(inventoryMutation, {
+                  variables: {
+                    input: {
+                      reason: "correction",
+                      setQuantities: [{
+                        inventoryItemId: variant.inventoryItem.id,
+                        locationId: primaryLocation.id,
+                        quantity: defaultInventory,
+                      }],
+                    },
+                  },
+                });
+                const inventoryResult = await normalizeAdminGraphqlResult(inventoryRaw, pfx);
+                
+                if (inventoryResult?.data?.inventorySetOnHandQuantities?.userErrors?.length > 0) {
+                  console.error(`${pfx} Inventory error for ${variant.title}:`, inventoryResult.data.inventorySetOnHandQuantities.userErrors);
+                } else {
+                  console.log(`${pfx} Set inventory for ${variant.title}: ${defaultInventory} units`);
+                }
+              } catch (invError) {
+                console.error(`${pfx} Failed to set inventory for ${variant.title}:`, invError);
+              }
+            }
+          }
+        } else {
+          console.log(`${pfx} No location found, skipping inventory setup`);
+        }
+      }
+    } catch (inventoryError) {
+      console.error(`${pfx} Failed to set inventory:`, inventoryError);
+      // Don't fail - product was created successfully
+    }
+
+    // Step 4: Add images if provided
     if (imageUrls && imageUrls.length > 0) {
-      console.log(`${pfx} Step 3: Adding ${imageUrls.length} image(s) to product...`);
+      console.log(`${pfx} Step 4: Adding ${imageUrls.length} image(s) to product...`);
       
       const mediaMutation = `
         mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
