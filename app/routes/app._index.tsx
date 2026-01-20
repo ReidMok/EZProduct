@@ -148,15 +148,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const formData = await request.formData();
     keywords = (formData.get("keywords") as string) || "";
     imageUrl = formData.get("imageUrl") as string | null;
+    const sizeOptions = (formData.get("sizeOptions") as string) || "";
+    const brandName = (formData.get("brandName") as string) || "";
+    const productNotes = (formData.get("productNotes") as string) || "";
 
-    console.log("[App Action] Form data received. Keywords:", keywords?.substring(0, 50) + "...");
+    console.log("[App Action] Form data received:");
+    console.log("  - Keywords:", keywords?.substring(0, 50));
+    console.log("  - SizeOptions:", sizeOptions);
+    console.log("  - BrandName:", brandName);
+    console.log("  - ProductNotes:", productNotes?.substring(0, 50));
 
     if (!keywords || keywords.trim() === "") {
       console.log("[App Action] No keywords provided. Redirecting with error.");
       return redirect(
         buildEmbeddedRedirectUrl({
           result: "error",
-          message: "Please enter product keywords",
+          message: "请输入产品关键词 / Please enter product keywords",
           productId: null,
         })
       );
@@ -166,8 +173,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     
     // Step 1: Generate product using AI
     console.log("[App Action] Step 1: Generating product with AI...");
-    const generatedProduct = await generateProduct(keywords.trim(), imageUrl || undefined);
+    const generatedProduct = await generateProduct({
+      keywords: keywords.trim(),
+      imageUrl: imageUrl || undefined,
+      sizeOptions: sizeOptions.trim() || undefined,
+      brandName: brandName.trim() || undefined,
+      productNotes: productNotes.trim() || undefined,
+    });
     console.log("[App Action] AI generation completed. Title:", generatedProduct.title);
+    console.log("[App Action] Variants count:", generatedProduct.variants.length);
+    console.log("[App Action] Variant sizes:", generatedProduct.variants.map(v => v.size).join(", "));
 
     // Step 2: Sync to Shopify
     console.log("[App Action] Step 2: Syncing to Shopify...");
@@ -342,10 +357,13 @@ export default function Index() {
   const [documentSubmitting, setDocumentSubmitting] = useState(false);
   const [keywords, setKeywords] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [sizeOptions, setSizeOptions] = useState("");
+  const [brandName, setBrandName] = useState("");
+  const [productNotes, setProductNotes] = useState("");
 
   // Restore form data from localStorage after session refresh
   useEffect(() => {
-    console.log("[App UI] === VERSION 3.0 LOADED ===");
+    console.log("[App UI] === VERSION 4.0 LOADED ===");
     
     // If session was refreshed, restore form data from localStorage
     if (sessionRefreshed) {
@@ -353,14 +371,14 @@ export default function Index() {
       try {
         const savedKeywords = localStorage.getItem("ezproduct_keywords");
         const savedImageUrl = localStorage.getItem("ezproduct_imageUrl");
-        if (savedKeywords) {
-          console.log("[App UI] Restored keywords:", savedKeywords);
-          setKeywords(savedKeywords);
-        }
-        if (savedImageUrl) {
-          console.log("[App UI] Restored imageUrl:", savedImageUrl);
-          setImageUrl(savedImageUrl);
-        }
+        const savedSizeOptions = localStorage.getItem("ezproduct_sizeOptions");
+        const savedBrandName = localStorage.getItem("ezproduct_brandName");
+        const savedProductNotes = localStorage.getItem("ezproduct_productNotes");
+        if (savedKeywords) setKeywords(savedKeywords);
+        if (savedImageUrl) setImageUrl(savedImageUrl);
+        if (savedSizeOptions) setSizeOptions(savedSizeOptions);
+        if (savedBrandName) setBrandName(savedBrandName);
+        if (savedProductNotes) setProductNotes(savedProductNotes);
       } catch (e) {
         console.error("[App UI] Failed to restore form data:", e);
       }
@@ -372,6 +390,9 @@ export default function Index() {
       try {
         localStorage.removeItem("ezproduct_keywords");
         localStorage.removeItem("ezproduct_imageUrl");
+        localStorage.removeItem("ezproduct_sizeOptions");
+        localStorage.removeItem("ezproduct_brandName");
+        localStorage.removeItem("ezproduct_productNotes");
       } catch (e) {
         // Ignore
       }
@@ -449,30 +470,17 @@ export default function Index() {
             reloadDocument
             onSubmit={(e) => {
               setDocumentSubmitting(true);
-              console.log("[App UI] Form onSubmit triggered! (v3.0)");
-              console.log("[App UI] Keywords state:", keywords);
-              console.log("[App UI] ImageUrl state:", imageUrl);
+              console.log("[App UI] Form onSubmit triggered! (v4.0)");
               
               // Save form data to localStorage in case session needs refresh
               try {
                 localStorage.setItem("ezproduct_keywords", keywords);
                 localStorage.setItem("ezproduct_imageUrl", imageUrl);
-                console.log("[App UI] Saved form data to localStorage");
+                localStorage.setItem("ezproduct_sizeOptions", sizeOptions);
+                localStorage.setItem("ezproduct_brandName", brandName);
+                localStorage.setItem("ezproduct_productNotes", productNotes);
               } catch (err) {
                 console.error("[App UI] Failed to save to localStorage:", err);
-              }
-              
-              // Debug: Check hidden inputs directly
-              const form = e.currentTarget;
-              const hiddenKeywords = form.querySelector('input[name="keywords"]') as HTMLInputElement;
-              const hiddenImageUrl = form.querySelector('input[name="imageUrl"]') as HTMLInputElement;
-              console.log("[App UI] Hidden keywords input value:", hiddenKeywords?.value);
-              console.log("[App UI] Hidden imageUrl input value:", hiddenImageUrl?.value);
-              
-              const formData = new FormData(form);
-              console.log("[App UI] FormData entries:");
-              for (const [key, value] of formData.entries()) {
-                console.log(`  ${key}: ${value}`);
               }
               // Don't prevent default - let browser submit
             }}
@@ -481,6 +489,9 @@ export default function Index() {
                 Polaris TextField doesn't always sync to native form fields. */}
             <input type="hidden" name="keywords" value={keywords} />
             <input type="hidden" name="imageUrl" value={imageUrl} />
+            <input type="hidden" name="sizeOptions" value={sizeOptions} />
+            <input type="hidden" name="brandName" value={brandName} />
+            <input type="hidden" name="productNotes" value={productNotes} />
 
             <BlockStack gap="400">
               <TextField
@@ -501,13 +512,44 @@ export default function Index() {
                 label="Product Image URL (Optional)"
                 type="url"
                 value={imageUrl}
-                onChange={(value) => {
-                  console.log("[App UI] ImageUrl changed:", value);
-                  setImageUrl(value);
-                }}
+                onChange={(value) => setImageUrl(value)}
                 placeholder="https://example.com/product-image.jpg"
-                helpText="Optional: Provide an image URL for AI to analyze and incorporate into the description."
+                helpText="可选：提供图片链接，AI 会分析图片并融入产品描述中"
                 autoComplete="off"
+                disabled={isSubmitting || documentSubmitting}
+              />
+
+              <TextField
+                label="Size Options / 尺寸选项 (Optional)"
+                type="text"
+                value={sizeOptions}
+                onChange={(value) => setSizeOptions(value)}
+                placeholder="e.g., S, M, L, XL  或  小号, 中号, 大号  或  6inch, 8inch, 10inch"
+                helpText="可选：输入产品的尺寸选项，用逗号分隔。如不填写，AI 会根据产品类型自动生成合适的尺寸"
+                autoComplete="off"
+                disabled={isSubmitting || documentSubmitting}
+              />
+
+              <TextField
+                label="Brand Name / 品牌名称 (Optional)"
+                type="text"
+                value={brandName}
+                onChange={(value) => setBrandName(value)}
+                placeholder="e.g., ResinMemory, Handmade Studio"
+                helpText="可选：输入品牌名称，会自然地融入标题和描述中"
+                autoComplete="off"
+                disabled={isSubmitting || documentSubmitting}
+              />
+
+              <TextField
+                label="Additional Product Info / 产品补充说明 (Optional)"
+                type="text"
+                value={productNotes}
+                onChange={(value) => setProductNotes(value)}
+                placeholder="e.g., 手工制作，独家设计，限量版..."
+                helpText="可选：添加关于产品的额外信息，如材质、工艺、特色等，AI 会融入产品描述"
+                autoComplete="off"
+                multiline={3}
                 disabled={isSubmitting || documentSubmitting}
               />
 
@@ -529,22 +571,31 @@ export default function Index() {
           </Form>
         </LegacyCard>
 
-        <LegacyCard sectioned title="How It Works">
+        <LegacyCard sectioned title="How It Works / 使用说明">
           <BlockStack gap="300">
             <Text as="p">
-                  <strong>1. Enter Keywords:</strong> Describe your product (e.g., "Minimalist Ceramic Coffee Mug")
+              <strong>1. 输入产品关键词:</strong> 描述你的产品（如："极简陶瓷咖啡杯"、"手工树脂摆件"）
             </Text>
             <Text as="p">
-              <strong>2. AI Generation:</strong> Our AI creates a complete product listing including:
+              <strong>2. 可选设置:</strong>
             </Text>
             <ul>
-              <li>SEO-optimized title and description</li>
-              <li>3 size variants (6", 8", 10") with cm/inch conversion table</li>
-              <li>Pricing and SKU generation</li>
-              <li>Relevant tags and SEO metadata</li>
+              <li><strong>图片链接:</strong> 提供产品图片 URL，AI 会分析并添加到产品中</li>
+              <li><strong>尺寸选项:</strong> 自定义尺寸（如 S/M/L/XL 或 小号/中号/大号），不填则 AI 智能生成</li>
+              <li><strong>品牌名称:</strong> 添加你的品牌，会融入标题和描述</li>
+              <li><strong>补充说明:</strong> 添加材质、工艺等特色信息</li>
             </ul>
             <Text as="p">
-              <strong>3. Auto-Sync:</strong> Product is automatically created in your Shopify store
+              <strong>3. AI 生成:</strong> AI 会根据产品类型智能创建：
+            </Text>
+            <ul>
+              <li>SEO 优化的标题和描述</li>
+              <li>适合产品类型的尺寸变体（服装用 S/M/L，摆件用尺寸，配饰用单一尺寸等）</li>
+              <li>合理的定价和 SKU</li>
+              <li>相关标签和 SEO 元数据</li>
+            </ul>
+            <Text as="p">
+              <strong>4. 自动同步:</strong> 产品自动创建到你的 Shopify 店铺
             </Text>
           </BlockStack>
         </LegacyCard>
